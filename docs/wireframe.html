@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concierge wireframe</title>
+<style>
+  :root {
+    --bg: #f4f4f2;
+    --panel: #ffffff;
+    --ink: #222222;
+    --muted: #6b6b6b;
+    --line: #d6d6d2;
+    --soft: #ececea;
+    --accent: #3a5bd9;
+    --ok: #2e7d5b;
+    --warn: #a86a00;
+    --danger: #b3261e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  .who { color: var(--muted); font-size: 14px; }
+  .who select { font: inherit; padding: 2px 6px; }
+  .note {
+    margin: 12px 20px 0;
+    padding: 8px 12px;
+    border: 1px dashed var(--line);
+    color: var(--muted);
+    font-size: 13px;
+  }
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    padding: 16px 20px 32px;
+  }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  section > h2 {
+    font-size: 15px;
+    margin: 0;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: 6px; }
+
+  /* Conversation */
+  .msg { max-width: 88%; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); }
+  .msg.in { align-self: flex-end; background: var(--soft); border-bottom-right-radius: 2px; }
+  .msg.out { align-self: flex-start; border-bottom-left-radius: 2px; }
+  .meta { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .channel { font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+  .saved {
+    align-self: flex-start;
+    font-size: 13px;
+    color: var(--ok);
+    border: 1px solid var(--ok);
+    border-radius: 999px;
+    padding: 2px 10px;
+  }
+  .saved a, .used a { color: inherit; }
+  .used { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .card.consent { border-color: var(--accent); }
+  .card.stale { border-color: var(--warn); }
+  .card h3 { font-size: 14px; margin: 0 0 4px; }
+  .card p { margin: 0 0 8px; font-size: 14px; }
+  .card ul { margin: 0 0 8px; padding-left: 18px; font-size: 14px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn {
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.danger { color: var(--danger); border-color: var(--danger); }
+  .composer { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); margin-top: auto; }
+  .composer input { flex: 1; font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; }
+
+  /* Memory panel */
+  .toggle { font-size: 13px; font-weight: 400; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .mem { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+  .mem:last-of-type { border-bottom: 0; }
+  .mem p { margin: 0 0 4px; }
+  .mem small { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .badge { font-size: 11px; border-radius: 4px; padding: 0 6px; border: 1px solid; margin-right: 4px; }
+  .badge.private { color: var(--muted); }
+  .badge.shareable { color: var(--accent); }
+  .badge.internal { color: var(--ink); }
+  .badge.stale { color: var(--warn); }
+  .linkish { font-size: 13px; color: var(--accent); text-decoration: underline; }
+  .danger-zone { border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; color: var(--muted); }
+
+  /* Pending panel */
+  .item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .item p { margin: 0 0 4px; font-size: 14px; }
+  .item small { color: var(--muted); font-size: 12px; }
+  .steps { display: flex; gap: 4px; margin: 6px 0; }
+  .steps span { flex: 1; height: 6px; border-radius: 3px; background: var(--soft); }
+  .steps span.done { background: var(--ok); }
+  .steps span.now { background: var(--accent); }
+  .state { font-size: 12px; font-weight: 600; }
+
+  @media (max-width: 1000px) {
+    main { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Concierge</h1>
+  <span class="who">Signed in as <select aria-label="Persona"><option>Roberto (member)</option><option>Ana (member)</option><option>Juliana (manager)</option></select></span>
+</header>
+
+<p class="note">Static wireframe. No logic: it exists to validate layout and copy before code. Data is fictional.</p>
+
+<main>
+
+  <!-- 1. Conversation -->
+  <section aria-labelledby="conv">
+    <h2 id="conv">Conversation <span class="toggle">Chat and email in one timeline</span></h2>
+    <div class="body">
+
+      <div class="msg in">
+        <span class="meta"><span class="channel">Email</span> roberto@metalurgica.com · Mon 09:12</span>
+        I'm looking to automate quality control on our production line this year. Do you know anyone who has done it?
+      </div>
+
+      <div class="msg out">
+        <span class="meta">Concierge · Mon 09:12</span>
+        I can look for members who have done that. Do you want an intro, or first some reading from past events?
+      </div>
+      <span class="saved">Saved: goal to automate quality control in 2027 · <a href="#">Undo</a></span>
+
+      <div class="msg in">
+        <span class="meta"><span class="channel">Chat</span> Roberto · Tue 18:40</span>
+        An intro, please. And remember: no vendors.
+      </div>
+
+      <div class="msg out">
+        <span class="meta">Concierge · Tue 18:40</span>
+        Got it. I'll ask Juliana to confirm a candidate, then check with you before anyone sees your details.
+        <div class="used">Used: <a href="#">goal: automate quality control</a> · <a href="#">preference: no vendor contacts</a></div>
+      </div>
+      <span class="saved">Saved: prefers not to be contacted by vendors · <a href="#">Undo</a></span>
+
+      <div class="card consent">
+        <h3>Intro proposal: Ana Souza, COO at a retailer</h3>
+        <p>Ana led an AI rollout in operations. Before I ask her, choose what she can see about you:</p>
+        <ul>
+          <li><label><input type="checkbox" checked> Your name and title</label></li>
+          <li><label><input type="checkbox" checked> Your goal: automate quality control</label></li>
+          <li><label><input type="checkbox"> Your company name</label></li>
+        </ul>
+        <div class="row">
+          <button class="btn primary">Ask Ana</button>
+          <button class="btn">Suggest someone else</button>
+          <button class="btn">Not now</button>
+        </div>
+      </div>
+
+      <div class="card stale">
+        <h3>Is this still right?</h3>
+        <p>I have you as CEO at Metalúrgica Silva, last confirmed 8 months ago.</p>
+        <div class="row">
+          <button class="btn">Still right</button>
+          <button class="btn">Update</button>
+        </div>
+      </div>
+
+    </div>
+    <div class="composer">
+      <input placeholder="Write a message" aria-label="Message">
+      <button class="btn primary">Send</button>
+    </div>
+  </section>
+
+  <!-- 2. Memory panel -->
+  <section aria-labelledby="mem">
+    <h2 id="mem">What I know about you
+      <label class="toggle"><input type="checkbox"> Pause memory</label>
+    </h2>
+    <div class="body">
+      <p class="label">Profile</p>
+
+      <div class="mem">
+        <p>CEO at Metalúrgica Silva</p>
+        <small><span class="badge shareable">Shareable</span><span class="badge stale">Check</span>From email · 8 months ago</small>
+        <div class="row"><button class="btn">Edit</button><button class="btn danger">Delete</button></div>
+      </div>
+
+      <p class="label">Goals and preferences</p>
+
+      <div class="mem">
+        <p>Wants to automate quality control in 2027</p>
+        <small><span class="badge shareable">Shareable</span>From email · Mon · <a class="linkish" href="#">See message</a></small>
+        <div class="row"><button class="btn">Edit</button><button class="btn danger">Delete</button></div>
+      </div>
+
+      <div class="mem">
+        <p>Prefers not to be contacted by vendors</p>
+        <small><span class="badge private">Private</span>From chat · Tue · <a class="linkish" href="#">See message</a></small>
+        <div class="row"><button class="btn">Edit</button><button class="btn danger">Delete</button></div>
+      </div>
+
+      <p class="label">Community team notes</p>
+
+      <div class="mem">
+        <p>Attended the March event in São Paulo</p>
+        <small><span class="badge internal">Internal</span>Added by the team</small>
+        <div class="row"><button class="btn danger">Delete</button></div>
+      </div>
+
+      <div class="danger-zone">
+        <p>Private: only you and the concierge in your conversations. Shareable: can be used in intros you approve. Internal: used by the team for logistics.</p>
+        <button class="btn danger">Delete everything</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. Pending items and intros -->
+  <section aria-labelledby="pend">
+    <h2 id="pend">Pending</h2>
+    <div class="body">
+      <p class="label">Intros</p>
+
+      <div class="item">
+        <p><strong>Intro to Ana Souza</strong></p>
+        <div class="steps" aria-label="Step 2 of 5">
+          <span class="done"></span><span class="now"></span><span></span><span></span><span></span>
+        </div>
+        <p class="state">Waiting for you</p>
+        <small>Approve what Ana can see · due Fri</small>
+      </div>
+
+      <div class="item">
+        <p><strong>Intro to Carlos Lima</strong></p>
+        <div class="steps" aria-label="Step 4 of 5">
+          <span class="done"></span><span class="done"></span><span class="done"></span><span class="now"></span><span></span>
+        </div>
+        <p class="state">Meeting booked</p>
+        <small>Thu, Dec 3 · I'll check in after</small>
+      </div>
+
+      <div class="item">
+        <p><strong>Intro to a logistics CFO</strong></p>
+        <p class="state">Won't go ahead</p>
+        <small>Closed Nov 10 · <a class="linkish" href="#">Ask for another</a></small>
+      </div>
+
+      <p class="label">Action items</p>
+
+      <div class="item">
+        <p>Send the QC project deck to Carlos</p>
+        <small>Owner: you · due Wed · <a class="linkish" href="#">Edit</a> · <a class="linkish" href="#">Done</a></small>
+      </div>
+
+      <div class="item">
+        <p>Share the event recording on AI in operations</p>
+        <small>Owner: Juliana (team) · due Fri</small>
+      </div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>
