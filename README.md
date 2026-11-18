@@ -61,6 +61,16 @@ Sign in with any of these fictional people and the demo password:
 | Roberto Silva | Member (CEO) | `roberto@metalurgica-silva.example` |
 | Ana Souza | Member (COO) | `ana@varejo-souza.example` |
 | Juliana Costa | Relationship manager | `juliana@community.example` |
+| Carlos Lima | Member (CFO) | `carlos@rota-logistica.example` |
+| Marina Alves | Member (founder of a QC software vendor) | `marina@visionqc.example` |
+
+### Try the intro flow
+
+1. Sign in as Roberto and ask the concierge to introduce you to someone who rolled out AI in operations.
+2. Sign in as Juliana and confirm one of the suggested candidates on the intro board.
+3. Sign in as Roberto, choose what the candidate can see, and ask them.
+4. Sign in as the candidate and accept or decline.
+5. Use **Advance 1 day** in the sidebar to see reminders, expirations and the follow-up.
 
 ## LLM usage logging
 
