@@ -46,6 +46,37 @@ SEED_MEMBERS = [
             ("email", "juliana@community.example", True),
         ],
     },
+    {
+        "display_name": "Carlos Lima",
+        "role": "member",
+        "company": "Rota Logística",
+        "title": "CFO",
+        "identities": [
+            ("chat", "carlos", True),
+            ("email", "carlos@rota-logistica.example", True),
+        ],
+    },
+    {
+        "display_name": "Marina Alves",
+        "role": "member",
+        "company": "VisionQC",
+        "title": "Founder and CEO",
+        "identities": [
+            ("chat", "marina", True),
+            ("email", "marina@visionqc.example", True),
+        ],
+    },
+]
+
+# Memories other members already have, so intro matching has something to work with.
+# (display_name, content, category, visibility). The private one must never leak (c1).
+SEED_MEMORIES = [
+    ("Ana Souza", "Led an AI rollout in customer service operations", "expertise", "shareable"),
+    ("Ana Souza", "Wants to meet manufacturing leaders working on automation", "interest", "shareable"),
+    ("Ana Souza", "Attended the March event in São Paulo", "interest", "internal"),
+    ("Carlos Lima", "Implemented computer vision for package inspection in warehouses", "expertise", "shareable"),
+    ("Carlos Lima", "Is considering leaving his job next year", "goal", "private"),
+    ("Marina Alves", "Sells AI quality-control software to manufacturers", "company", "shareable"),
 ]
 
 
@@ -65,45 +96,65 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection, seed: bool = True) -> None:
-    """Create tables if missing and insert the demo members once."""
+    """Create tables if missing, upgrade old databases and add any missing demo people."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     _migrate(conn)
-    if seed and conn.execute("SELECT COUNT(*) FROM members").fetchone()[0] == 0:
+    if seed:
         _seed(conn)
-    if seed and conn.execute("SELECT COUNT(*) FROM credentials").fetchone()[0] == 0:
         _seed_demo_passwords(conn)
     conn.commit()
 
 
+# (table, column, definition) added after the first version of the schema.
+MIGRATIONS = [
+    ("messages", "context_excluded",
+     "INTEGER NOT NULL DEFAULT 0 CHECK (context_excluded IN (0, 1))"),
+    ("intro_workflows", "suggestions", "TEXT"),
+    ("action_items", "reminded_at", "TEXT"),
+]
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns introduced after a database was created (CREATE TABLE IF NOT EXISTS won't)."""
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
-    if "context_excluded" not in columns:
-        conn.execute(
-            "ALTER TABLE messages ADD COLUMN context_excluded INTEGER NOT NULL DEFAULT 0 "
-            "CHECK (context_excluded IN (0, 1))"
-        )
+    for table, column, definition in MIGRATIONS:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _seed_demo_passwords(conn: sqlite3.Connection) -> None:
     from app.auth import demo_password, set_password
 
-    for row in conn.execute("SELECT id FROM members").fetchall():
+    for row in conn.execute(
+        "SELECT id FROM members WHERE id NOT IN (SELECT member_id FROM credentials)"
+    ).fetchall():
         set_password(conn, row["id"], demo_password())
 
 
 def _seed(conn: sqlite3.Connection) -> None:
+    """Insert demo people that don't exist yet (by name), with their identities and memories."""
+    existing = {r["display_name"] for r in conn.execute("SELECT display_name FROM members")}
+    new_ids: dict[str, int] = {}
     for m in SEED_MEMBERS:
+        if m["display_name"] in existing:
+            continue
         cur = conn.execute(
             "INSERT INTO members (display_name, role, company, title) VALUES (?, ?, ?, ?)",
             (m["display_name"], m["role"], m["company"], m["title"]),
         )
-        member_id = cur.lastrowid
+        new_ids[m["display_name"]] = cur.lastrowid
         for i, (channel, address, verified) in enumerate(m["identities"]):
             conn.execute(
                 """INSERT INTO identities (member_id, channel_id, address, verified, is_primary)
                    VALUES (?, ?, ?, ?, ?)""",
-                (member_id, channel_id(conn, channel), address.lower(), int(verified), int(i == 0)),
+                (cur.lastrowid, channel_id(conn, channel), address.lower(), int(verified), int(i == 0)),
+            )
+    for name, content, category, visibility in SEED_MEMORIES:
+        if name in new_ids:
+            conn.execute(
+                """INSERT INTO memories (member_id, content, category, visibility, confidence)
+                   VALUES (?, ?, ?, ?, 1.0)""",
+                (new_ids[name], content, category, visibility),
             )
 
 
@@ -162,10 +213,12 @@ def add_message(
     quarantined: bool = False,
     used_memory_ids: list[int] | None = None,
 ) -> int:
+    from app import clock
+
     cur = conn.execute(
         """INSERT INTO messages
-           (member_id, channel_id, direction, sender_address, body, quarantined, used_memory_ids)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           (member_id, channel_id, direction, sender_address, body, quarantined, used_memory_ids, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             member_id,
             channel_id(conn, channel),
@@ -174,6 +227,7 @@ def add_message(
             body,
             int(quarantined),
             json.dumps(used_memory_ids) if used_memory_ids else None,
+            clock.now_str(conn),  # simulated clock, so "Advance 1 day" shows in the timeline
         ),
     )
     conn.commit()
@@ -215,3 +269,24 @@ def exclude_exchange_from_context(conn: sqlite3.Connection, member_id: int, inbo
 
 def count_quarantined(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM messages WHERE quarantined = 1").fetchone()[0]
+
+
+def first_manager_id(conn: sqlite3.Connection) -> int | None:
+    row = conn.execute("SELECT id FROM members WHERE role = 'manager' ORDER BY id LIMIT 1").fetchone()
+    return row["id"] if row else None
+
+
+def add_notification(conn: sqlite3.Connection, member_id: int, body: str, workflow_id: int | None = None) -> None:
+    """Does not commit: callers include it in their own transaction."""
+    from app import clock
+
+    conn.execute(
+        "INSERT INTO notifications (member_id, workflow_id, body, created_at) VALUES (?, ?, ?, ?)",
+        (member_id, workflow_id, body, clock.now_str(conn)),
+    )
+
+
+def list_notifications(conn: sqlite3.Connection, member_id: int, limit: int = 10) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM notifications WHERE member_id = ? ORDER BY id DESC LIMIT ?", (member_id, limit)
+    ).fetchall()

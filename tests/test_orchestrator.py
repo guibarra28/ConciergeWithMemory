@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from app import db, memory, orchestrator
+from app import actions, db, memory, orchestrator, workflow
 from tests.conftest import member_id
-from tests.fakes import FakeLLM, candidate
+from tests.fakes import FakeLLM, action_item, candidate
 
 
 @pytest.fixture
@@ -12,7 +12,24 @@ def fake_llm(monkeypatch):
     fake = FakeLLM()
     monkeypatch.setattr(orchestrator, "call_llm", fake)
     monkeypatch.setattr(memory, "call_llm", fake)
+    monkeypatch.setattr(workflow, "call_llm", fake)
     return fake
+
+
+def test_intro_request_in_chat_creates_a_workflow(conn, fake_llm):
+    fake_llm.wants_intro, fake_llm.intro_reason = True, "someone who automated quality control"
+    fake_llm.suggested_ids = [member_id(conn, "Ana Souza")]
+    result = orchestrator.handle_message(conn, "chat", "roberto", "Can you introduce me to someone?")
+
+    assert result.intro["state"] == "requested"
+    assert result.intro["reason"] == "someone who automated quality control"
+
+
+def test_action_items_from_chat(conn, fake_llm):
+    fake_llm.action_items = [action_item(excerpt="send you the deck")]
+    result = orchestrator.handle_message(conn, "chat", "roberto", "I'll send you the deck tomorrow")
+    assert [a["description"] for a in result.action_items] == ["Send the QC deck to Ana"]
+    assert len(actions.list_open(conn, member_id(conn, "Roberto Silva"))) == 1
 
 
 def test_chat_and_email_share_one_timeline(conn, fake_llm):

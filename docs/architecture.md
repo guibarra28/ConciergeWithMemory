@@ -169,7 +169,7 @@ How the Memory Service filters memories, depending on who is asking and why:
 | Visibility | Owner's own conversation | Intro matching and intro messages to another member | Team / manager view |
 | --- | --- | --- | --- |
 | `private` | Yes | Never | No |
-| `shareable` | Yes | Only after the owner consents to that specific intro | No |
+| `shareable` | Yes | Used for matching (as a one-line reason). Shown in full only for the items the owner selects when consenting to that specific intro | Only the one-line match reason |
 | `internal` | Yes (members can see everything stored about them) | Never | Status and logistics only |
 
 Rules that apply regardless of visibility:

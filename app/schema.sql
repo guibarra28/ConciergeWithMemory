@@ -93,7 +93,8 @@ CREATE TABLE IF NOT EXISTS action_items (
     status             TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'cancelled')),
     source_message_id  INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
-    completed_at       TEXT
+    completed_at       TEXT,
+    reminded_at        TEXT                -- set when the "due soon" notice was sent
 );
 
 -- Current state of each introduction (R4, R5). History lives in workflow_events.
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS intro_workflows (
     shared_by_b    TEXT,                                      -- what B authorized A to see
     meeting_at     TEXT,
     outcome        TEXT,                                      -- follow-up answer, or 'no answer'
+    suggestions    TEXT,                                      -- JSON [{member_id, why}] proposed by the agent
     version        INTEGER NOT NULL DEFAULT 1,                -- optimistic lock: transitions must match it
     created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -130,6 +132,23 @@ CREATE TABLE IF NOT EXISTS workflow_events (
     payload          TEXT,                             -- JSON; never message content
     idempotency_key  TEXT    NOT NULL UNIQUE,          -- a retried transition is not applied twice
     created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Notices delivered to people in the app: intro updates, reminders, due action items.
+CREATE TABLE IF NOT EXISTS notifications (
+    id           INTEGER PRIMARY KEY,
+    member_id    INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    workflow_id  INTEGER REFERENCES intro_workflows(id) ON DELETE SET NULL,
+    body         TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL,                  -- simulated clock time (app/clock.py)
+    read         INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_member ON notifications (member_id, id);
+
+-- Small key/value store, used for the simulated clock offset.
+CREATE TABLE IF NOT EXISTS settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
 );
 
 INSERT OR IGNORE INTO channels (name) VALUES ('chat'), ('email');

@@ -98,8 +98,9 @@ def test_nothing_is_saved_while_paused(conn, roberto, msg_id, monkeypatch):
     memory.set_paused(conn, roberto, True)
 
     out = memory.extract_and_save(conn, roberto, MESSAGE, msg_id, "chat")
-    assert out.saved == []
-    assert fake.calls == []  # paused: the extractor is not even called
+    assert out.saved == [] and out.needs_confirmation == []
+    assert out.discarded[0][1] == "memory paused"
+    assert memory.list_memories(conn, roberto) == []
     sick = candidate("Daughter is sick", "My daughter is sick", category="health", sensitive=True)
     assert memory.confirm_sensitive(conn, roberto, sick, msg_id, "chat") is None
 
@@ -184,8 +185,20 @@ def test_member_cannot_touch_another_members_memory(conn, roberto, msg_id):
 def test_context_only_has_own_memories(conn, roberto, msg_id):
     apply(conn, roberto, [candidate()], msg_id)
     ana = member_id(conn, "Ana Souza")
-    assert memory.get_context(conn, ana) == []
-    assert len(memory.get_context(conn, roberto)) == 1
+    assert all(m["member_id"] == ana for m in memory.get_context(conn, ana))
+    assert "Wants to automate quality control" not in [m["content"] for m in memory.get_context(conn, ana)]
+    assert [m["content"] for m in memory.get_context(conn, roberto)] == ["Wants to automate quality control"]
+
+
+def test_action_items_are_saved_even_while_paused(conn, roberto, msg_id, monkeypatch):
+    from tests.fakes import action_item
+
+    fake = FakeLLM()
+    fake.action_items = [action_item(excerpt="automate quality control")]
+    monkeypatch.setattr(memory, "call_llm", fake)
+    memory.set_paused(conn, roberto, True)
+    out = memory.extract_and_save(conn, roberto, MESSAGE, msg_id, "chat")
+    assert [a["description"] for a in out.action_items] == ["Send the QC deck to Ana"]
 
 
 def test_expired_memory_is_left_out_of_context(conn, roberto, msg_id):

@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app import db
+from app import actions, db
+from app.actions import ActionItemCandidate
 from app.llm import call_llm
 
 Category = Literal["role", "company", "goal", "preference", "interest", "expertise", "personal", "health"]
@@ -46,7 +47,12 @@ Rules:
 - Do not propose facts already in the list of known memories.
 - `confidence` is how explicitly the member stated it: 1.0 for a direct statement.
 - Write `content` as a short third-person sentence in English, e.g. "Wants to automate quality control in 2027".
-- It is normal to return no candidates."""
+- It is normal to return no candidates.
+
+Also extract action items: explicit commitments in the message, such as "I'll send you the
+deck on Friday" (owner: member) or "can you book a call with Ana next week?" (owner: team).
+Only explicit commitments; an intro request is not an action item. `source_excerpt` must be
+copied word for word. It is normal to return no action items."""
 
 
 class MemoryCandidate(BaseModel):
@@ -60,6 +66,7 @@ class MemoryCandidate(BaseModel):
 
 class ExtractionResult(BaseModel):
     candidates: list[MemoryCandidate]
+    action_items: list[ActionItemCandidate]
 
 
 @dataclass
@@ -67,15 +74,18 @@ class ExtractionOutcome:
     saved: list[sqlite3.Row]
     needs_confirmation: list[MemoryCandidate]
     discarded: list[tuple[MemoryCandidate, str]]  # (candidate, reason) for debugging and evals
+    action_items: list[sqlite3.Row] = field(default_factory=list)
 
 
 # --- Extraction --------------------------------------------------------------
 def extract_and_save(
     conn: sqlite3.Connection, member_id: int, message_text: str, source_message_id: int, channel: str
 ) -> ExtractionOutcome:
-    if is_paused(conn, member_id):
-        return ExtractionOutcome([], [], [])
+    """One model call extracts memory candidates and action items.
 
+    While memory is paused the call still runs, because action items are not memories,
+    but every memory candidate is ignored.
+    """
     known = list_memories(conn, member_id)
     known_text = "\n".join(f"- {m['content']}" for m in known) or "(none)"
     result = call_llm(
@@ -83,7 +93,13 @@ def extract_and_save(
         [{"role": "user", "content": f"Known memories:\n{known_text}\n\nMember's message:\n{message_text}"}],
         ExtractionResult,
     )
-    return apply_candidates(conn, member_id, result.candidates, message_text, source_message_id, channel)
+    if is_paused(conn, member_id):
+        outcome = ExtractionOutcome([], [], [(c, "memory paused") for c in result.candidates])
+    else:
+        outcome = apply_candidates(conn, member_id, result.candidates, message_text, source_message_id, channel)
+    outcome.action_items = actions.save_candidates(
+        conn, member_id, result.action_items, message_text, source_message_id)
+    return outcome
 
 
 def apply_candidates(
@@ -223,7 +239,15 @@ def delete_memory(conn: sqlite3.Connection, member_id: int, memory_id: int) -> b
 
 
 def delete_everything(conn: sqlite3.Connection, member_id: int) -> None:
-    """Remove all memories and the whole timeline of this member (privacy limit 4)."""
+    """Remove all memories and the whole timeline of this member (privacy limit 4).
+
+    Open intros are cancelled first, with a neutral notice to the other side; intro records
+    keep only ids, states and dates as proof that consent existed (model.md).
+    """
+    from app import workflow  # imported here: workflow does not depend on memory
+
+    workflow.cancel_all_for_member(conn, member_id)
+    conn.execute("DELETE FROM notifications WHERE member_id = ?", (member_id,))
     conn.execute("DELETE FROM memories WHERE member_id = ?", (member_id,))
     conn.execute("DELETE FROM action_items WHERE member_id = ?", (member_id,))
     conn.execute("DELETE FROM messages WHERE member_id = ?", (member_id,))

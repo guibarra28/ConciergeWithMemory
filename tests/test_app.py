@@ -48,7 +48,8 @@ def test_wrong_password_shows_generic_error(app):
 
 def test_manager_sees_manager_view(app):
     sign_in(app, "juliana@community.example", auth.demo_password())
-    assert any(s.value == "Manager view" for s in app.subheader)
+    assert any(s.value == "Intro board" for s in app.subheader)
+    assert not any(s.value == "Your timeline" for s in app.subheader)
 
 
 def test_memory_panel_lists_edits_and_deletes(monkeypatch, tmp_path):
@@ -88,6 +89,60 @@ def test_pause_toggle(app):
     app.run()
     conn = db.connect()
     assert memory.is_paused(conn, 2)
+
+
+def test_intro_flow_through_the_interface(monkeypatch, tmp_path):
+    """Juliana proposes Ana, Roberto asks, Ana accepts, then the meeting is booked."""
+    from app import db, workflow
+    from tests.fakes import FakeLLM
+
+    path = tmp_path / "flow.db"
+    monkeypatch.setenv("DB_PATH", str(path))
+    fake = FakeLLM()
+    monkeypatch.setattr(workflow, "call_llm", fake)
+    setup = db.connect(path)
+    db.init_db(setup)
+    fake.suggested_ids = [2]  # Ana
+    wf_id = workflow.request_intro(setup, 1, "Someone who automated quality control")["id"]
+
+    def as_person(email):
+        at = AppTest.from_file(APP, default_timeout=30)
+        at.run()
+        sign_in(at, email, auth.demo_password())
+        assert not at.exception
+        return at
+
+    juliana = as_person("juliana@community.example")
+    juliana.button(key=f"propose_{wf_id}").click()
+    juliana.run()
+    assert workflow.get(setup, wf_id)["state"] == "awaiting_a"
+
+    roberto = as_person("roberto@metalurgica-silva.example")
+    roberto.button(key=f"ask_{wf_id}").click()
+    roberto.run()
+    assert workflow.get(setup, wf_id)["state"] == "awaiting_b"
+
+    ana = as_person("ana@varejo-souza.example")
+    assert any("Roberto Silva" in m.value and "would like to meet you" in m.value for m in ana.markdown)
+    ana.button(key=f"accept_{wf_id}").click()
+    ana.run()
+    assert workflow.get(setup, wf_id)["state"] == "introduced"
+
+    ana.button(key=f"book_{wf_id}").click()
+    ana.run()
+    assert workflow.get(setup, wf_id)["state"] == "scheduled"
+
+    for _ in range(4):
+        ana.button(key="advance_day").click()
+        ana.run()
+    assert workflow.get(setup, wf_id)["state"] == "follow_up"
+
+
+def test_no_emojis_in_the_interface():
+    import re
+
+    source = Path(APP).read_text(encoding="utf-8")
+    assert not re.search("[\U0001F300-\U0001FAFF☀-➿]", source)
 
 
 def test_sign_out(app):

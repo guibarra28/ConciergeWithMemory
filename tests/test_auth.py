@@ -59,6 +59,8 @@ def test_demo_logins_list_one_email_per_person(conn):
         "roberto@metalurgica-silva.example",
         "ana@varejo-souza.example",
         "juliana@community.example",
+        "carlos@rota-logistica.example",
+        "marina@visionqc.example",
     ]
 
 

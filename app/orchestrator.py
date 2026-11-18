@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
-from app import db, memory
+from app import db, memory, workflow
 from app.identity import ResolvedIdentity, resolve
 from app.llm import LLMError, call_llm
 
@@ -34,6 +34,8 @@ Be concise, warm and practical. Never invent facts about the member or about oth
 You have no internet access and no real-time data (weather, news, prices, schedules). If asked,
 say so plainly instead of guessing.
 Never promise to remember something; the app shows the member what was saved.
+You can't book, reserve or send anything yourself. When the member asks for something the
+community team must do, say you've passed it to their relationship manager.
 
 What you remember about this member (id in brackets):
 {memories}
@@ -45,6 +47,13 @@ Use a memory only when it is relevant to the answer, and list the ids of the mem
 actually used in `used_memory_ids`. If you used none, return an empty list.
 Never mention memory ids in the reply text.
 
+Introductions: if the member asks to be introduced to someone, or to find someone to talk
+to, set `wants_intro` to true and put what they are looking for in `intro_reason`, in their
+own words. In the reply, say you'll look for the right person, that their relationship
+manager confirms the match, and that nothing about them is shared without their approval.
+Never name or suggest specific members yourself. Otherwise set `wants_intro` to false and
+`intro_reason` to an empty string.
+
 Language: always answer in the language of the member's most recent message, even if names,
 companies, memories or earlier messages are in another language."""
 
@@ -54,6 +63,8 @@ class ConciergeReply(BaseModel):
     language: str = Field(description="Language of the member's most recent message, e.g. 'English'.")
     reply: str = Field(description="The answer, written in `language`.")
     used_memory_ids: list[int] = Field(description="Ids of the memories used in the reply.")
+    wants_intro: bool = Field(description="True if the member asked to be introduced to someone.")
+    intro_reason: str = Field(description="What the member is looking for, in their words; empty if no intro.")
 
 
 @dataclass
@@ -65,6 +76,8 @@ class TurnResult:
     saved_memories: list[sqlite3.Row] = field(default_factory=list)
     needs_confirmation: list[memory.MemoryCandidate] = field(default_factory=list)
     used_memories: list[sqlite3.Row] = field(default_factory=list)
+    action_items: list[sqlite3.Row] = field(default_factory=list)
+    intro: sqlite3.Row | None = None
 
 
 def handle_message(conn: sqlite3.Connection, channel: str, sender_address: str, text: str) -> TurnResult:
@@ -103,11 +116,19 @@ def handle_message(conn: sqlite3.Connection, channel: str, sender_address: str, 
         conn, member_id=member_id, channel=channel, direction="outbound",
         body=result.reply, used_memory_ids=used_ids,
     )
+
+    intro = None
+    if result.wants_intro and member["role"] == "member":
+        # The workflow, not the model, decides who is suggested and what is shared.
+        intro = workflow.request_intro(conn, member_id, result.intro_reason)
+
     return TurnResult(
         identity, result.reply, inbound_id, outbound_id,
         saved_memories=extraction.saved,
         needs_confirmation=extraction.needs_confirmation,
         used_memories=memory.get_memories_by_ids(conn, member_id, used_ids),
+        action_items=extraction.action_items,
+        intro=intro,
     )
 
 

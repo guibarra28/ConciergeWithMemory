@@ -1,6 +1,12 @@
 import pytest
 
-from app import db
+from app import auth, db
+
+
+@pytest.fixture(autouse=True)
+def fast_password_hashing(monkeypatch):
+    # Seeding hashes one password per demo person in every test; real cost is for production.
+    monkeypatch.setattr(auth, "SCRYPT_N", 2**8)
 
 
 @pytest.fixture
