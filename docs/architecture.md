@@ -180,23 +180,7 @@ Rules that apply regardless of visibility:
 
 ## Intro states (R4, R5)
 
-```mermaid
-stateDiagram-v2
-    [*] --> Requested: Member A asks for an intro
-    Requested --> AwaitingConsentA: Manager or agent proposes match
-    AwaitingConsentA --> AwaitingConsentB: A consents (recorded)
-    AwaitingConsentB --> Introduced: B consents (recorded)
-    Introduced --> MeetingBooked: Meeting confirmed
-    AwaitingConsentA --> Declined: A declines
-    AwaitingConsentB --> Declined: B declines
-    AwaitingConsentA --> Expired: No answer in 3 days
-    AwaitingConsentB --> Expired: No answer in 3 days
-    MeetingBooked --> [*]
-    Declined --> [*]
-    Expired --> [*]
-```
-
-Each state has an owner (the member whose answer is pending, or the relationship manager for `Requested`) and a deadline. `Introduced` is only reachable when consent records exist for both sides.
+The full state machine, with owners, deadlines, guards and open questions, is in [model.md](model.md#3-intro-state-machine). In short: each state has an owner and a deadline, and `introduced` is only reachable when consent events exist for both sides.
 
 ## Open decisions
 

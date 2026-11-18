@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Author** | Guilherme Barra (first draft written with Claude Code) |
+| **Author** | Guilherme Barra  |
 | **Status** | Draft |
 | **Last updated** | 2026-11-18 |
 | **Links** | [Discovery](discovery.md) · [Architecture](architecture.md) |
@@ -96,7 +96,7 @@ Targets for the prototype are measured on scripted test conversations; productio
 ## 9. Open questions
 
 - [ ] How long must consent records be kept after a member deletes everything? — Legal / community leadership
-- [ ] Can managers propose matches proactively, or only act on member requests? — Community leadership
 - [ ] What are today's baseline numbers for intro completion and response time? — Relationship managers
-- [ ] Should members see `internal` memories about themselves? This draft assumes yes, based on R1. — Product and community leadership
 - [ ] Which email provider will be used in production? — Engineering
+
+Decided for the prototype (details in [model.md](model.md#5-decisions)): managers do not start intros on their own, and members can see `internal` memories about themselves.
