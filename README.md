@@ -49,6 +49,18 @@ pytest
 | `OPENAI_API_KEY` | Your OpenAI API key |
 | `OPENAI_MODEL` | Model used for every LLM call |
 | `OPENAI_TIMEOUT_SECONDS` | Request timeout in seconds (optional, default 30) |
+| `DEMO_PASSWORD` | Password of the fictional demo accounts, applied when the database is created (optional, default `concierge-demo`) |
+| `DB_PATH` | SQLite file location (optional, default `data/concierge.db`) |
+
+### Demo accounts
+
+Sign in with any of these fictional people and the demo password:
+
+| Person | Role | Email |
+| --- | --- | --- |
+| Roberto Silva | Member (CEO) | `roberto@metalurgica-silva.example` |
+| Ana Souza | Member (COO) | `ana@varejo-souza.example` |
+| Juliana Costa | Relationship manager | `juliana@community.example` |
 
 ## LLM usage logging
 

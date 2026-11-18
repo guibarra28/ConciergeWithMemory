@@ -69,7 +69,16 @@ def init_db(conn: sqlite3.Connection, seed: bool = True) -> None:
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     if seed and conn.execute("SELECT COUNT(*) FROM members").fetchone()[0] == 0:
         _seed(conn)
+    if seed and conn.execute("SELECT COUNT(*) FROM credentials").fetchone()[0] == 0:
+        _seed_demo_passwords(conn)
     conn.commit()
+
+
+def _seed_demo_passwords(conn: sqlite3.Connection) -> None:
+    from app.auth import demo_password, set_password
+
+    for row in conn.execute("SELECT id FROM members").fetchall():
+        set_password(conn, row["id"], demo_password())
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -94,13 +103,35 @@ def channel_id(conn: sqlite3.Connection, name: str) -> int:
     return row["id"]
 
 
-def list_people(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def get_chat_login(conn: sqlite3.Connection, member_id: int) -> str | None:
+    row = conn.execute(
+        """SELECT i.address FROM identities i JOIN channels c ON c.id = i.channel_id
+           WHERE i.member_id = ? AND c.name = 'chat' AND i.verified = 1
+           ORDER BY i.is_primary DESC, i.id LIMIT 1""",
+        (member_id,),
+    ).fetchone()
+    return row["address"] if row else None
+
+
+def list_email_identities(conn: sqlite3.Connection, member_id: int) -> list[sqlite3.Row]:
     return conn.execute(
-        """SELECT m.id, m.display_name, m.role, i.address AS chat_login
+        """SELECT i.address, i.verified FROM identities i JOIN channels c ON c.id = i.channel_id
+           WHERE i.member_id = ? AND c.name = 'email'
+           ORDER BY i.verified DESC, i.is_primary DESC, i.id""",
+        (member_id,),
+    ).fetchall()
+
+
+def list_demo_logins(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Primary verified email of every person who has a password, for the demo login hint."""
+    return conn.execute(
+        """SELECT m.display_name, m.role, i.address
            FROM members m
-           JOIN identities i ON i.member_id = m.id
-           JOIN channels c ON c.id = i.channel_id AND c.name = 'chat'
-           WHERE i.is_primary = 1
+           JOIN credentials cr ON cr.member_id = m.id
+           JOIN identities i ON i.member_id = m.id AND i.verified = 1
+           JOIN channels c ON c.id = i.channel_id AND c.name = 'email'
+           WHERE i.id = (SELECT MIN(i2.id) FROM identities i2
+                         WHERE i2.member_id = m.id AND i2.channel_id = c.id AND i2.verified = 1)
            ORDER BY m.id"""
     ).fetchall()
 

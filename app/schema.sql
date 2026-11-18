@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS identities (
     UNIQUE (channel_id, address)
 );
 
+-- Password login. One credential per person; the login address must be one of their
+-- verified email identities. Only a salted scrypt hash is stored, never the password.
+CREATE TABLE IF NOT EXISTS credentials (
+    member_id      INTEGER PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
+    password_hash  TEXT    NOT NULL,
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 -- One timeline per member across channels (R2).
 -- Messages from unknown senders have member_id NULL and quarantined = 1.
 CREATE TABLE IF NOT EXISTS messages (

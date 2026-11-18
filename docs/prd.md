@@ -52,7 +52,7 @@ The deliverable is a one-day working prototype, not a production launch.
 | R9: assistant emails count as the member's if registered | Marked out of scope in discovery. The identity model already supports several addresses per member, so it can be added later without redesign. |
 | WhatsApp channel | Members use it today, but chat plus email is enough to prove the cross-channel timeline. WhatsApp adds provider approval and cost. |
 | Real email sending and receiving | Streamlit cannot receive webhooks. A simulated inbox tests the same logic in one day. |
-| Real login and authentication | A persona selector (Roberto, Ana, Juliana) is enough for a prototype. Authentication is required before any real member uses it. |
+| Single sign-on, password reset and persistent sessions | Email and password login is in scope (see decisions). Google or company SSO, "forgot password" and staying signed in after a page reload need an email provider and cookies, which do not change what the prototype validates. |
 | Calendar integration for booking intro meetings | "Meeting booked" is set manually. Integration does not change the consent logic being validated. |
 | Automated memory quality tuning | Today we measure quality with scripted test conversations; tuning comes after we see the errors. |
 
@@ -65,7 +65,8 @@ The deliverable is a one-day working prototype, not a production launch.
 | What can never be stored or used? | Personal life and health are never used in intros, and are only stored after explicit confirmation. Inferred facts are never stored. | Privacy limit 1, and "remember only what the member actually said". |
 | What happens to an unknown email sender? | Generic reply asking for verification; message goes to a quarantine queue; no memory access. | R3 and hypothesis H4. |
 | What if the address is similar but not identical to a registered one? | Treated as unknown. No fuzzy matching. | A wrong merge would show one member's data to someone else, which is worse than asking to verify. |
-| Who can cancel an intro? | Either member at any point before "Introduced"; the manager at any point. | Consent can be withdrawn; the manager owns stalled requests. |
+| How do people sign in? | Email and password. The login email must be one of the person's verified addresses. Demo accounts with a shared password let visitors try the prototype. | Asking who you are on every message makes no sense for a member. Password login needs no external setup, unlike Google sign-in, and still lets visitors test. |
+| Who can cancel an intro? | Either member until the follow-up step; the manager at any point. Cancelling cannot take back contact details already shared. | Consent can be withdrawn; the manager owns stalled requests. Details in [model.md](model.md#5-decisions). |
 | What does "pause memory" do? | Stops new memories from being saved. Existing memories are still used. | Matches what members asked for: control without losing continuity. |
 | What does "delete everything" remove? | All memories and the full timeline. Intro records keep only status and consent events, without message content. | Privacy limit 4, while keeping proof of consent for intros that already happened. |
 | Can managers read conversations? | No. They see intro status, owner and deadline only. | Privacy limit 3. |
