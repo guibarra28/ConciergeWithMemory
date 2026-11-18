@@ -29,3 +29,6 @@ Reference: [wireframe.html](wireframe.html).
 | Date | Decision | Reason |
 | --- | --- | --- |
 | 2026-11-12 | Simulated email inbox instead of a real provider for the prototype. | Streamlit cannot receive webhooks; the identity and timeline logic is the same. |
+| 2026-11-18 | An email address that is similar but not identical to a registered one is treated as unknown. Matching is exact after lowercasing and trimming. | A false match would show one member's data to someone else; a false "unknown" only costs the member one verification step. Typos and new addresses are fixed by registering the address, not by guessing. |
+| 2026-11-18 | Unknown senders get a fixed reply, written in code, and the model is never called. | Not calling the model is the only way to guarantee no member data is used. The message is kept in quarantine for the team. |
+| 2026-11-18 | The reply schema asks the model for the message's language before the reply itself. | A prompt instruction alone was ignored in testing (English questions got Portuguese and Spanish answers). Committing to the language first fixed it. |
