@@ -51,6 +51,45 @@ def test_manager_sees_manager_view(app):
     assert any(s.value == "Manager view" for s in app.subheader)
 
 
+def test_memory_panel_lists_edits_and_deletes(monkeypatch, tmp_path):
+    from app import db, memory
+    from tests.fakes import candidate
+
+    path = tmp_path / "panel.db"
+    monkeypatch.setenv("DB_PATH", str(path))
+    setup = db.connect(path)
+    db.init_db(setup)
+    msg = db.add_message(setup, member_id=1, channel="chat", direction="inbound",
+                         body="I want to automate quality control")
+    mem_id = memory.apply_candidates(setup, 1, [candidate()], "I want to automate quality control",
+                                     msg, "chat").saved[0]["id"]
+
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    sign_in(at, "roberto@metalurgica-silva.example", auth.demo_password())
+    assert any(e.label == "Wants to automate quality control" for e in at.sidebar.expander)
+
+    at.sidebar.text_area(key=f"content_{mem_id}").input("Automate QC in 2027")
+    at.sidebar.button(key=f"save_{mem_id}").click()
+    at.run()
+    assert memory.get_memory(setup, 1, mem_id)["content"] == "Automate QC in 2027"
+
+    at.sidebar.button(key=f"del_{mem_id}").click()
+    at.run()
+    assert memory.list_memories(setup, 1) == []
+    assert not any(e.label == "Automate QC in 2027" for e in at.sidebar.expander)
+
+
+def test_pause_toggle(app):
+    from app import db, memory
+
+    sign_in(app, "ana@varejo-souza.example", auth.demo_password())
+    app.sidebar.toggle[0].set_value(True)
+    app.run()
+    conn = db.connect()
+    assert memory.is_paused(conn, 2)
+
+
 def test_sign_out(app):
     sign_in(app, "ana@varejo-souza.example", auth.demo_password())
     app.sidebar.button[0].click()

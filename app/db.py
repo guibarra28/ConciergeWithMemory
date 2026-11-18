@@ -67,11 +67,22 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection, seed: bool = True) -> None:
     """Create tables if missing and insert the demo members once."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _migrate(conn)
     if seed and conn.execute("SELECT COUNT(*) FROM members").fetchone()[0] == 0:
         _seed(conn)
     if seed and conn.execute("SELECT COUNT(*) FROM credentials").fetchone()[0] == 0:
         _seed_demo_passwords(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after a database was created (CREATE TABLE IF NOT EXISTS won't)."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "context_excluded" not in columns:
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN context_excluded INTEGER NOT NULL DEFAULT 0 "
+            "CHECK (context_excluded IN (0, 1))"
+        )
 
 
 def _seed_demo_passwords(conn: sqlite3.Connection) -> None:
@@ -169,17 +180,37 @@ def add_message(
     return cur.lastrowid
 
 
-def get_timeline(conn: sqlite3.Connection, member_id: int, limit: int | None = None) -> list[sqlite3.Row]:
-    """All messages of one member, across channels, oldest first."""
+def get_timeline(
+    conn: sqlite3.Connection, member_id: int, limit: int | None = None, for_model: bool = False
+) -> list[sqlite3.Row]:
+    """All messages of one member, across channels, oldest first.
+
+    With for_model=True, messages excluded after a memory was deleted are left out.
+    """
     rows = conn.execute(
-        """SELECT msg.id, msg.direction, msg.body, msg.sender_address, msg.created_at, c.name AS channel
-           FROM messages msg JOIN channels c ON c.id = msg.channel_id
-           WHERE msg.member_id = ? AND msg.quarantined = 0
-           ORDER BY msg.id DESC
-           LIMIT ?""",
+        f"""SELECT msg.id, msg.direction, msg.body, msg.sender_address, msg.created_at,
+                   msg.used_memory_ids, msg.context_excluded, c.name AS channel
+            FROM messages msg JOIN channels c ON c.id = msg.channel_id
+            WHERE msg.member_id = ? AND msg.quarantined = 0
+                  {"AND msg.context_excluded = 0" if for_model else ""}
+            ORDER BY msg.id DESC
+            LIMIT ?""",
         (member_id, limit if limit is not None else -1),
     ).fetchall()
     return list(reversed(rows))
+
+
+def exclude_exchange_from_context(conn: sqlite3.Connection, member_id: int, inbound_message_id: int) -> None:
+    """Hide a member message and the concierge reply right after it from the model."""
+    conn.execute(
+        """UPDATE messages SET context_excluded = 1
+           WHERE member_id = ? AND (
+               id = ?
+               OR id = (SELECT MIN(id) FROM messages
+                        WHERE member_id = ? AND id > ? AND direction = 'outbound')
+           )""",
+        (member_id, inbound_message_id, member_id, inbound_message_id),
+    )
 
 
 def count_quarantined(conn: sqlite3.Connection) -> int:

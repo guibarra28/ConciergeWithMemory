@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS messages (
     body             TEXT    NOT NULL,
     quarantined      INTEGER NOT NULL DEFAULT 0 CHECK (quarantined IN (0, 1)),
     used_memory_ids  TEXT,                -- JSON array of memory ids shown under an outbound reply
+    -- 1 after the member deletes a memory that came from this exchange: the member still
+    -- sees the message, but the model no longer reads it.
+    context_excluded INTEGER NOT NULL DEFAULT 0 CHECK (context_excluded IN (0, 1)),
     created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
     CHECK (member_id IS NOT NULL OR quarantined = 1)
 );
