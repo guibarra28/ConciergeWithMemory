@@ -174,3 +174,73 @@ def test_sign_out(app):
     app.run()
     assert "member_id" not in app.session_state
     assert any(s.value == "Sign in" for s in app.subheader)
+
+
+# --- c2: recovery shown in the interface -------------------------------------
+def test_failed_reply_offers_try_again(monkeypatch, tmp_path):
+    from app import db, memory, orchestrator
+    from tests.fakes import FakeLLM
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "retry.db"))
+    fake = FakeLLM()
+    monkeypatch.setattr(orchestrator, "call_llm", fake)
+    monkeypatch.setattr(memory, "call_llm", fake)
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    sign_in(at, "roberto@metalurgica-silva.example", auth.demo_password())
+
+    fake.fail_reply = True
+    at.chat_input[0].set_value("Any events next month?").run()
+    assert not at.exception
+    assert any("Your message is saved" in e.value for e in at.error)
+    assert at.button(key="retry_reply")
+
+    fake.fail_reply = False
+    at.button(key="retry_reply").click().run()
+    conn = db.connect()
+    timeline = db.get_timeline(conn, 1)
+    assert [m["direction"] for m in timeline] == ["inbound", "outbound"]
+    assert not any(b.key == "retry_reply" for b in at.button)
+
+
+def test_stale_memory_asks_still_true(app):
+    from app import db, memory
+
+    sign_in(app, "ana@varejo-souza.example", auth.demo_password())
+    assert any("not been confirmed in 6 months" in i.value for i in app.sidebar.info)
+    conn = db.connect()
+    old = next(m for m in memory.list_memories(conn, 2) if m["content"] == "Leads a customer service team of 400 people")
+    app.sidebar.button(key=f"confirm_{old['id']}").click().run()
+    assert not memory.is_stale(conn, memory.get_memory(conn, 2, old["id"]))
+    assert not app.sidebar.info
+
+
+def test_deleting_a_memory_seen_in_an_intro_warns_first(monkeypatch, tmp_path):
+    from app import db, memory, workflow
+    from tests.fakes import FakeLLM
+
+    path = tmp_path / "seen.db"
+    monkeypatch.setenv("DB_PATH", str(path))
+    fake = FakeLLM()
+    monkeypatch.setattr(workflow, "call_llm", fake)
+    setup = db.connect(path)
+    db.init_db(setup)
+    cur = setup.execute("INSERT INTO memories (member_id, content, category, visibility, confidence) "
+                        "VALUES (1, 'Wants to automate weld inspection', 'goal', 'shareable', 1)")
+    setup.commit()
+    shared_id = cur.lastrowid
+    fake.suggested_ids = [2]
+    wf = workflow.request_intro(setup, 1, "Someone who automated QC")
+    workflow.propose(setup, wf["id"], 3, 2)
+    workflow.consent(setup, wf["id"], 1, [shared_id])
+
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    sign_in(at, "roberto@metalurgica-silva.example", auth.demo_password())
+    at.sidebar.button(key=f"del_{shared_id}").click().run()
+    assert memory.get_memory(setup, 1, shared_id) is not None      # not deleted yet
+    assert any("Ana Souza" in w.value and "already saw it" in w.value for w in at.sidebar.warning)
+
+    at.sidebar.button(key=f"del_yes_{shared_id}").click().run()
+    assert memory.get_memory(setup, 1, shared_id) is None
+    assert any("no longer shown in your intro with Ana Souza" in s.value for s in at.success)

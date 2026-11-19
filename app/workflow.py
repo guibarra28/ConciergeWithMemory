@@ -156,6 +156,49 @@ def shared_items(conn: sqlite3.Connection, wf: sqlite3.Row, side: str) -> dict:
     }
 
 
+def seen_by_others(conn: sqlite3.Connection, member_id: int, memory_id: int) -> list[dict]:
+    """Intros where this member shared this memory and the other side was shown it.
+
+    `shared_by_a` is set only when A consents, which is also when B is asked, and
+    `shared_by_b` only when B consents, which introduces them. So a memory id in either
+    field means the other member has already seen it.
+    """
+    seen = []
+    for wf in conn.execute(
+        "SELECT * FROM intro_workflows WHERE requester_id = ? OR target_id = ? ORDER BY id",
+        (member_id, member_id),
+    ).fetchall():
+        side, other_id = ("A", wf["target_id"]) if wf["requester_id"] == member_id else ("B", wf["requester_id"])
+        raw = wf["shared_by_a"] if side == "A" else wf["shared_by_b"]
+        if raw and memory_id in json.loads(raw).get("memory_ids", []) and other_id:
+            event = "a_consented" if side == "A" else "b_consented"
+            when = conn.execute(
+                "SELECT MAX(created_at) AS at FROM workflow_events WHERE workflow_id = ? AND event = ?",
+                (wf["id"], event),
+            ).fetchone()["at"]
+            seen.append({"workflow_id": wf["id"], "other_name": db.get_member(conn, other_id)["display_name"],
+                         "shared_at": when})
+    return seen
+
+
+def forget_shared_memory(conn: sqlite3.Connection, member_id: int, memory_id: int) -> None:
+    """Remove a deleted memory's id from every consent this member gave.
+
+    SQLite can reuse the id of the last deleted row, so a stale id left in a consent
+    could later point to a new memory the member never agreed to share.
+    """
+    for wf in conn.execute(
+        "SELECT * FROM intro_workflows WHERE requester_id = ? OR target_id = ?", (member_id, member_id)
+    ).fetchall():
+        column = "shared_by_a" if wf["requester_id"] == member_id else "shared_by_b"
+        if not wf[column]:
+            continue
+        data = json.loads(wf[column])
+        if memory_id in data.get("memory_ids", []):
+            data["memory_ids"] = [i for i in data["memory_ids"] if i != memory_id]
+            conn.execute(f"UPDATE intro_workflows SET {column} = ? WHERE id = ?", (json.dumps(data), wf["id"]))
+
+
 def shareable_memories(conn: sqlite3.Connection, member_id: int) -> list[sqlite3.Row]:
     return permissions.memories_for(conn, None, "matching", owner_id=member_id)
 

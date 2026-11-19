@@ -39,7 +39,8 @@ Sensitive memories are always private and can never be made shareable. **(code a
 
 - Durable facts last until the member edits or deletes them.
 - Temporary facts ("travelling less these months") get an expiry date and stop being used after it. **(code)**
-- Role and company facts not confirmed in 6 months will be flagged for confirmation (R8, planned).
+- Memories not confirmed in 6 months are flagged in the panel with "Still true?", and the model is told they may be out of date, so it asks before relying on them (R8). This applies to every category, not only role and company. **(code)** Not built yet: holding a flagged memory back from intro matching until it is confirmed.
+- When the member says something that makes a memory outdated ("I now run Aço Novo"), the old memory is updated in place with a "Updated · Undo" notice, and it becomes private again. **(code)**
 
 ## How the member controls it
 

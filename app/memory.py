@@ -7,6 +7,8 @@ code, not left to the model:
 - low-confidence candidates are dropped;
 - sensitive candidates are never saved without the member's explicit confirmation;
 - nothing is saved while memory is paused;
+- an outdated memory is replaced only if it is the member's own, not sensitive and not a
+  team note, and the replacement starts private again;
 - every read and write is scoped to one member_id.
 """
 
@@ -15,11 +17,12 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app import actions, db, permissions
+from app import actions, clock, db, permissions
 from app.actions import ActionItemCandidate
 from app.llm import call_llm
 
@@ -28,6 +31,7 @@ SENSITIVE_CATEGORIES = {"personal", "health"}
 MEMBER_VISIBILITIES = ("private", "shareable")  # 'internal' is set by the team only
 MIN_CONFIDENCE = 0.7
 CONTEXT_LIMIT = 50
+STALE_AFTER_DAYS = 180  # R8: ask the member to confirm memories older than this
 
 EXTRACTION_PROMPT = """You extract durable facts that a member of an executive community
 explicitly stated about themselves, so a concierge can remember them later.
@@ -45,6 +49,10 @@ Rules:
 - If the fact is temporary ("these months", "until March", "this quarter"), set
   `expires_in_days` to a reasonable estimate. Otherwise set it to null.
 - Do not propose facts already in the list of known memories.
+- If the message changes or contradicts a known memory (a new company or role, a changed
+  plan or preference), propose the new fact and list in `replaces_memory_ids` the ids of
+  every known memory it makes outdated (often more than one, e.g. both the old role and
+  the old company). Otherwise return an empty list.
 - `confidence` is how explicitly the member stated it: 1.0 for a direct statement.
 - Write `content` as a short third-person sentence in English, e.g. "Wants to automate quality control in 2027".
 - It is normal to return no candidates.
@@ -62,6 +70,8 @@ class MemoryCandidate(BaseModel):
     sensitive: bool
     source_excerpt: str = Field(description="Exact words from the member's message that state this fact.")
     expires_in_days: int | None = Field(description="Days until a temporary fact stops being true; null if durable.")
+    replaces_memory_ids: list[int] = Field(
+        default_factory=list, description="Ids of known memories this fact makes outdated; empty if none.")
 
 
 class ExtractionResult(BaseModel):
@@ -75,6 +85,8 @@ class ExtractionOutcome:
     needs_confirmation: list[MemoryCandidate]
     discarded: list[tuple[MemoryCandidate, str]]  # (candidate, reason) for debugging and evals
     action_items: list[sqlite3.Row] = field(default_factory=list)
+    # (memory after the update, the memories it replaced as they were) so the interface can offer Undo.
+    updated: list[tuple[sqlite3.Row, list[dict]]] = field(default_factory=list)
 
 
 # --- Extraction --------------------------------------------------------------
@@ -87,7 +99,7 @@ def extract_and_save(
     but every memory candidate is ignored.
     """
     known = list_memories(conn, member_id)
-    known_text = "\n".join(f"- {m['content']}" for m in known) or "(none)"
+    known_text = "\n".join(f"- [{m['id']}] {m['content']}" for m in known) or "(none)"
     result = call_llm(
         EXTRACTION_PROMPT,
         [{"role": "user", "content": f"Known memories:\n{known_text}\n\nMember's message:\n{message_text}"}],
@@ -123,10 +135,81 @@ def apply_candidates(
             outcome.discarded.append((c, "duplicate"))
         elif c.sensitive or c.category in SENSITIVE_CATEGORIES:
             outcome.needs_confirmation.append(c)
+        elif olds := _replaceable(conn, member_id, c.replaces_memory_ids):
+            outcome.updated.append((_replace(conn, member_id, olds, c, source_message_id, channel),
+                                    [dict(o) for o in olds]))
+            existing.add(_norm(c.content))
         else:
             outcome.saved.append(_insert(conn, member_id, c, source_message_id, channel, sensitive=False))
             existing.add(_norm(c.content))
     return outcome
+
+
+def _replaceable(conn, member_id: int, memory_ids: list[int]) -> list[sqlite3.Row]:
+    """Memories a candidate may replace: the member's own, not sensitive, not team notes."""
+    olds = []
+    for memory_id in dict.fromkeys(memory_ids):
+        old = get_memory(conn, member_id, memory_id)  # scoped to this member: no cross-member ids
+        if old is not None and not old["sensitive"] and old["visibility"] != "internal":
+            olds.append(old)
+    return olds
+
+
+def _replace(conn, member_id: int, olds: list[sqlite3.Row], c: MemoryCandidate, source_message_id,
+             channel) -> sqlite3.Row:
+    """Update the first outdated memory in place and remove the others.
+
+    The result is private: agreeing to share the old fact was not agreeing to share the new one.
+    """
+    from app import workflow  # imported here: workflow does not depend on memory
+
+    old, extra = olds[0], olds[1:]
+    for e in extra:
+        conn.execute("DELETE FROM memories WHERE id = ? AND member_id = ?", (e["id"], member_id))
+        workflow.forget_shared_memory(conn, member_id, e["id"])
+    expires = f"+{c.expires_in_days} days" if c.expires_in_days and c.expires_in_days > 0 else None
+    now = clock.now_str(conn)
+    conn.execute(
+        """UPDATE memories
+           SET content = ?, category = ?, confidence = ?, visibility = 'private',
+               source_message_id = ?, source_excerpt = ?, channel_id = ?,
+               valid_until = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now', ?) END,
+               last_confirmed_at = ?, updated_at = ?
+           WHERE id = ? AND member_id = ?""",
+        (c.content.strip(), c.category, c.confidence, source_message_id, c.source_excerpt.strip(),
+         db.channel_id(conn, channel), expires, expires, now, now, old["id"], member_id),
+    )
+    conn.commit()
+    return get_memory(conn, member_id, old["id"])
+
+
+def undo_replace(conn: sqlite3.Connection, member_id: int, previous: list[dict]) -> bool:
+    """Put the replaced memories back as they were before an automatic update."""
+    first, removed = previous[0], previous[1:]
+    for r in removed:
+        taken = conn.execute("SELECT 1 FROM memories WHERE id = ?", (r["id"],)).fetchone()
+        conn.execute(
+            """INSERT INTO memories (id, member_id, content, category, sensitive, visibility, confidence,
+                                     source_message_id, source_excerpt, channel_id, valid_until,
+                                     last_confirmed_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (None if taken else r["id"], member_id, r["content"], r["category"], r["sensitive"],
+             r["visibility"], r["confidence"], r["source_message_id"], r["source_excerpt"],
+             r["channel_id"], r["valid_until"], r["last_confirmed_at"], r["created_at"], clock.now_str(conn)),
+        )
+    previous = first
+    cur = conn.execute(
+        """UPDATE memories
+           SET content = ?, category = ?, confidence = ?, visibility = ?, source_message_id = ?,
+               source_excerpt = ?, channel_id = ?, valid_until = ?, last_confirmed_at = ?, updated_at = ?
+           WHERE id = ? AND member_id = ?""",
+        (previous["content"], previous["category"], previous["confidence"], previous["visibility"],
+         previous["source_message_id"], previous["source_excerpt"], previous["channel_id"],
+         previous["valid_until"], previous["last_confirmed_at"], clock.now_str(conn),
+         previous["id"], member_id),
+    )
+    conn.commit()
+    return cur.rowcount == 1
 
 
 def confirm_sensitive(
@@ -159,10 +242,31 @@ def get_context(conn: sqlite3.Connection, member_id: int) -> list[sqlite3.Row]:
                                     limit=CONTEXT_LIMIT)
 
 
-def format_for_prompt(memories: list[sqlite3.Row]) -> str:
+def format_for_prompt(memories: list[sqlite3.Row], conn: sqlite3.Connection | None = None) -> str:
     if not memories:
         return "(no memories yet)"
-    return "\n".join(f"[{m['id']}] ({m['category']}) {m['content']}" for m in memories)
+    stale_ids = {m["id"] for m in memories if conn is not None and is_stale(conn, m)}
+    lines = [f"[{m['id']}] ({m['category']}) {m['content']}" for m in memories if m["id"] not in stale_ids]
+    if stale_ids:
+        lines.append("\nPossibly out of date (not confirmed in over 6 months):")
+        lines += [f"[{m['id']}] ({m['category']}) {m['content']}" for m in memories if m["id"] in stale_ids]
+    return "\n".join(lines)
+
+
+# --- Staleness (R8) ----------------------------------------------------------
+def is_stale(conn: sqlite3.Connection, memory: sqlite3.Row) -> bool:
+    confirmed = clock.parse(memory["last_confirmed_at"])
+    return clock.now(conn) - confirmed >= timedelta(days=STALE_AFTER_DAYS)
+
+
+def confirm_still_true(conn: sqlite3.Connection, member_id: int, memory_id: int) -> bool:
+    now = clock.now_str(conn)
+    cur = conn.execute(
+        "UPDATE memories SET last_confirmed_at = ?, updated_at = ? WHERE id = ? AND member_id = ?",
+        (now, now, memory_id, member_id),
+    )
+    conn.commit()
+    return cur.rowcount == 1
 
 
 # --- Member control (R1) -----------------------------------------------------
@@ -204,9 +308,10 @@ def update_memory(
     conn.execute(
         """UPDATE memories
            SET content = COALESCE(?, content), visibility = COALESCE(?, visibility),
-               last_confirmed_at = datetime('now'), updated_at = datetime('now')
+               last_confirmed_at = ?, updated_at = ?
            WHERE id = ? AND member_id = ?""",
-        (content.strip() if content else None, visibility, memory_id, member_id),
+        (content.strip() if content else None, visibility, clock.now_str(conn), clock.now_str(conn),
+         memory_id, member_id),
     )
     conn.commit()
     return True
@@ -218,10 +323,13 @@ def delete_memory(conn: sqlite3.Connection, member_id: int, memory_id: int) -> b
     Without the second step the model would still "remember" the fact from the
     conversation history, and deleting would not really make it forget.
     """
+    from app import workflow  # imported here: workflow does not depend on memory
+
     memory = get_memory(conn, member_id, memory_id)
     if memory is None:
         return False
     conn.execute("DELETE FROM memories WHERE id = ? AND member_id = ?", (memory_id, member_id))
+    workflow.forget_shared_memory(conn, member_id, memory_id)
     if memory["source_message_id"]:
         db.exclude_exchange_from_context(conn, member_id, memory["source_message_id"])
     conn.commit()

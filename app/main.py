@@ -15,7 +15,7 @@ import streamlit as st
 from app import actions, auth, clock, db, memory, permissions, workflow
 from app.identity import resolve
 from app.llm import LLMError
-from app.orchestrator import TurnResult, handle_message
+from app.orchestrator import AlreadyAnswered, ReplyFailed, TurnResult, handle_message, retry_reply, unanswered_message
 
 CHANNEL_LABEL = {"chat": ":material/chat: Chat", "email": ":material/mail: Email"}
 VISIBILITY_LABEL = {
@@ -35,6 +35,8 @@ STATE_LABEL = {
     "cancelled": "Won't go ahead",
 }
 OTHER_ADDRESS = "Another address…"
+REPLY_FAILED = ("The concierge couldn't reply just now. Your message is saved, so you don't need to "
+                "type it again. Use Try again under it.")
 MAX_FAILED_LOGINS = 5
 LOCKOUT_SECONDS = 30
 
@@ -113,8 +115,9 @@ def run_action(fn, *args, **kwargs) -> None:
         fn(*args, **kwargs)
     except workflow.WorkflowError as exc:
         st.session_state.flash = str(exc)
-    except LLMError as exc:
-        st.session_state.flash = f"The assistant couldn't finish that step: {exc}. Please try again."
+    except LLMError:
+        st.session_state.flash = ("The assistant couldn't finish that step, so nothing changed. "
+                                  "Try again in a minute.")
     st.rerun()
 
 
@@ -134,6 +137,10 @@ def memory_panel() -> None:
     memories = memory.list_memories(conn, member_id)
     if not memories:
         st.caption("Nothing saved yet. As we talk, I'll save durable facts you tell me, and you can undo any of them.")
+    stale = {m["id"] for m in memories if memory.is_stale(conn, m)}
+    if stale:
+        st.info(f"{len(stale)} {'memory has' if len(stale) == 1 else 'memories have'} not been confirmed "
+                "in 6 months. Check that they're still true.", icon=":material/history:")
 
     for category in CATEGORY_LABEL:
         group = [m for m in memories if m["category"] == category]
@@ -141,8 +148,14 @@ def memory_panel() -> None:
             continue
         st.markdown(f"**{CATEGORY_LABEL[category]}**")
         for m in group:
-            with st.expander(m["content"]):
+            with st.expander(m["content"], expanded=m["id"] in stale):
                 st.caption(f"{VISIBILITY_LABEL[m['visibility']]} · saved {m['created_at'][:10]}")
+                if m["id"] in stale:
+                    st.caption(f":material/history: Last confirmed {fmt_date(m['last_confirmed_at'])}. "
+                               "Is it still true? If not, edit or delete it.")
+                    if st.button("Still true", key=f"confirm_{m['id']}", icon=":material/check:"):
+                        memory.confirm_still_true(conn, member_id, m["id"])
+                        st.rerun()
                 if m["source_excerpt"]:
                     st.caption(f"From your words: “{m['source_excerpt']}”")
                 new_content = st.text_area("Edit", value=m["content"], key=f"content_{m['id']}")
@@ -168,8 +181,13 @@ def memory_panel() -> None:
                     except ValueError as exc:
                         st.error(str(exc))
                 if delete_col.button("Delete", key=f"del_{m['id']}"):
-                    memory.delete_memory(conn, member_id, m["id"])
+                    if workflow.seen_by_others(conn, member_id, m["id"]):
+                        st.session_state.confirm_delete = m["id"]
+                    else:
+                        memory.delete_memory(conn, member_id, m["id"])
                     st.rerun()
+                if st.session_state.get("confirm_delete") == m["id"]:
+                    confirm_delete_shared(m)
 
     st.divider()
     with st.expander("Delete everything"):
@@ -181,6 +199,25 @@ def memory_panel() -> None:
             st.session_state.pop("notices", None)
             st.session_state.pop("last_email", None)
             st.rerun()
+
+
+def confirm_delete_shared(m) -> None:
+    """Deleting something another member already saw: say what deleting can and can't undo."""
+    seen = workflow.seen_by_others(conn, member_id, m["id"])
+    who = ", ".join(f"{s['other_name']} ({fmt_date(s['shared_at'])})" for s in seen)
+    st.warning(f"You shared this in an intro, so {who} already saw it. Deleting removes it from the "
+               "intro and from my memory, but can't take back what they read. They won't be told.",
+               icon=":material/visibility:")
+    yes, no = st.columns(2)
+    if yes.button("Delete anyway", key=f"del_yes_{m['id']}", type="primary"):
+        memory.delete_memory(conn, member_id, m["id"])
+        st.session_state.pop("confirm_delete", None)
+        names = ", ".join(s["other_name"] for s in seen)
+        st.session_state.flash_ok = f"Deleted. It's no longer shown in your intro with {names}, and I won't use it again."
+        st.rerun()
+    if no.button("Keep it", key=f"del_no_{m['id']}"):
+        st.session_state.pop("confirm_delete", None)
+        st.rerun()
 
 
 with st.sidebar:
@@ -210,7 +247,29 @@ st.title("Concierge")
 if msg := st.session_state.pop("flash", None):
     st.error(msg, icon=":material/error:")
 if msg := st.session_state.pop("flash_ok", None):
-    st.success(msg, icon=":material/schedule:")
+    st.success(msg, icon=":material/check_circle:")
+
+
+def retry_box(who: int) -> None:
+    """If the last message never got a reply, say so and offer to answer it again."""
+    pending = unanswered_message(conn, who)
+    if pending is None:
+        return
+    with st.container(border=True):
+        st.write(":material/sync_problem: I haven't replied to your last message yet. It's saved, "
+                 "so you don't need to type it again.")
+        if st.button("Try again", key="retry_reply", icon=":material/refresh:"):
+            try:
+                with st.spinner("Thinking..."):
+                    result = retry_reply(conn, who, pending["id"])
+                if (notices := st.session_state.get("notices")) is not None:
+                    notices["intro"] = result.intro is not None
+            except AlreadyAnswered:
+                pass
+            except LLMError:
+                st.session_state.flash = ("Still couldn't reply. Your message is still saved; "
+                                          "try again in a minute.")
+            st.rerun()
 
 
 def show_updates(who: int) -> None:
@@ -248,6 +307,7 @@ def manager_view() -> None:
             for msg in db.get_timeline(conn, member_id):
                 with st.chat_message("user" if msg["direction"] == "inbound" else "assistant"):
                     st.markdown(msg["body"])
+            retry_box(member_id)
         with tab_profiles:
             st.caption("Only what members marked Shareable, plus team notes. Private memories never appear here.")
             visible = permissions.memories_for(conn, current, "team")
@@ -331,10 +391,9 @@ if is_manager:
         try:
             with st.spinner("Thinking..."):
                 handle_message(conn, "chat", db.get_chat_login(conn, member_id), prompt)
-        except LLMError as exc:
-            st.error(f"Your message was saved, but the concierge could not reply: {exc}")
-        else:
-            st.rerun()
+        except LLMError:
+            st.session_state.flash = REPLY_FAILED
+        st.rerun()
     st.stop()
 
 
@@ -343,6 +402,7 @@ def remember_turn(result: TurnResult, channel: str) -> None:
     """Keep what the last turn saved or needs to confirm, to show notices with Undo."""
     st.session_state.notices = {
         "saved": [m["id"] for m in result.saved_memories],
+        "updated": [{"id": new["id"], "previous": previous} for new, previous in result.updated_memories],
         "pending": [c.model_dump() for c in result.needs_confirmation],
         "actions": [a["description"] for a in result.action_items],
         "intro": result.intro is not None,
@@ -363,6 +423,23 @@ def show_notices() -> None:
         if undo_col.button("Undo", key=f"undo_{m['id']}"):
             memory.delete_memory(conn, member_id, m["id"])
             notices["saved"].remove(m["id"])
+            st.rerun()
+
+    for change in list(notices.get("updated", [])):
+        m = memory.get_memory(conn, member_id, change["id"])
+        if m is None:
+            notices["updated"].remove(change)
+            continue
+        previous = change["previous"]
+        was = "; ".join(p["content"] for p in previous)
+        text_col, undo_col = st.columns([5, 1])
+        text_col.success(f"Updated: {m['content']} (was: {was})", icon=":material/edit_note:")
+        if any(p["visibility"] == "shareable" for p in previous):
+            text_col.caption("The old version was shared for intros. The new one is private until you "
+                             "share it again in the memory panel.")
+        if undo_col.button("Undo", key=f"undo_upd_{m['id']}"):
+            memory.undo_replace(conn, member_id, previous)
+            notices["updated"].remove(change)
             st.rerun()
 
     for i, data in enumerate(list(notices["pending"])):
@@ -564,9 +641,11 @@ def email_tab() -> None:
                 st.session_state.last_email = (sender, result.identity.is_known, result.reply)
                 if result.identity.is_known:
                     remember_turn(result, "email")
-            except LLMError as exc:
+            except ReplyFailed as exc:
                 st.session_state.last_email = None
-                st.error(f"The email was saved, but the concierge could not reply: {exc}")
+                remember_turn(exc.partial, "email")
+                st.error("The email is saved in your timeline, but the concierge couldn't reply just now. "
+                         "Use Try again under it.", icon=":material/sync_problem:")
 
     last = st.session_state.get("last_email")
     if last:
@@ -610,6 +689,7 @@ with timeline_col:
             if role == "assistant" and (line := used_memories_line(msg)):
                 st.caption(f":material/psychology: {line}")
 
+    retry_box(member_id)
     show_notices()
 
 if prompt := st.chat_input("Message the concierge"):
@@ -618,7 +698,9 @@ if prompt := st.chat_input("Message the concierge"):
         with st.spinner("Thinking..."):
             result = handle_message(conn, "chat", chat_login, prompt)
         remember_turn(result, "chat")
-    except LLMError as exc:
-        st.error(f"Your message was saved, but the concierge could not reply: {exc}")
-    else:
-        st.rerun()
+    except ReplyFailed as exc:
+        remember_turn(exc.partial, "chat")
+        st.session_state.flash = REPLY_FAILED
+    except LLMError:
+        st.session_state.flash = REPLY_FAILED
+    st.rerun()

@@ -19,6 +19,7 @@ class FakeLLM:
         self.suggested_ids: list[int] = []                   # every candidate suggestion call
         self.fail_extraction = False
         self.fail_suggestions = False
+        self.fail_reply = False
 
     def __call__(self, system, messages, schema):
         self.calls.append({"system": system, "messages": messages, "schema": schema.__name__})
@@ -32,6 +33,8 @@ class FakeLLM:
             if self.fail_suggestions:
                 raise LLMError("matching down")
             return Suggestions(candidates=[Suggestion(member_id=i, why="Good fit") for i in self.suggested_ids])
+        if self.fail_reply:
+            raise LLMError("reply down")
         reply = schema(language="English", reply=f"reply #{len(self.calls)}",
                        used_memory_ids=self.used_memory_ids,
                        wants_intro=self.wants_intro, intro_reason=self.intro_reason)
@@ -43,9 +46,11 @@ class FakeLLM:
 
 
 def candidate(content="Wants to automate quality control", excerpt="automate quality control",
-              category="goal", confidence=0.95, sensitive=False, expires_in_days=None) -> MemoryCandidate:
+              category="goal", confidence=0.95, sensitive=False, expires_in_days=None,
+              replaces=None) -> MemoryCandidate:
     return MemoryCandidate(content=content, category=category, confidence=confidence,
-                           sensitive=sensitive, source_excerpt=excerpt, expires_in_days=expires_in_days)
+                           sensitive=sensitive, source_excerpt=excerpt, expires_in_days=expires_in_days,
+                           replaces_memory_ids=list(replaces or []))
 
 
 def action_item(description="Send the QC deck to Ana", owner="member", due_in_days=3,

@@ -2,6 +2,9 @@
 
 An unknown sender never reaches the model or any member data (R3): the message is
 quarantined and gets a fixed verification reply.
+
+The member's message is saved before any model call. If the reply fails, nothing is lost:
+`retry_reply` answers the same saved message later, without saving it twice.
 """
 
 from __future__ import annotations
@@ -46,6 +49,8 @@ What you remember about this member (id in brackets):
 
 These memories are the member's latest word: if the conversation history disagrees with
 them, trust the memories. Do not bring up facts from the history that are not in this list.
+If your answer uses a memory listed as possibly out of date, say what you have on file
+and ask the member to confirm it is still true, in the same reply.
 
 Use a memory only when it is relevant to the answer, and list the ids of the memories you
 actually used in `used_memory_ids`. If you used none, return an empty list.
@@ -97,6 +102,7 @@ class TurnResult:
     inbound_message_id: int
     outbound_message_id: int | None
     saved_memories: list[sqlite3.Row] = field(default_factory=list)
+    updated_memories: list[tuple[sqlite3.Row, dict]] = field(default_factory=list)
     needs_confirmation: list[memory.MemoryCandidate] = field(default_factory=list)
     used_memories: list[sqlite3.Row] = field(default_factory=list)
     action_items: list[sqlite3.Row] = field(default_factory=list)
@@ -126,6 +132,56 @@ def handle_message(conn: sqlite3.Connection, channel: str, sender_address: str, 
         logger.warning("Memory extraction failed for message %s", inbound_id, exc_info=True)
         extraction = memory.ExtractionOutcome([], [], [])
 
+    try:
+        turn = _answer(conn, identity, channel, inbound_id)
+    except LLMError as exc:
+        # The message and whatever was remembered are kept; the reply can be retried.
+        partial = TurnResult(identity, "", inbound_id, None)
+        _attach(partial, extraction)
+        raise ReplyFailed(str(exc), partial) from exc
+    _attach(turn, extraction)
+    return turn
+
+
+class ReplyFailed(LLMError):
+    """The message was saved (and memories extracted) but the reply could not be written."""
+
+    def __init__(self, message: str, partial: "TurnResult"):
+        super().__init__(message)
+        self.partial = partial
+
+
+def _attach(turn: "TurnResult", extraction: memory.ExtractionOutcome) -> None:
+    turn.saved_memories = extraction.saved
+    turn.updated_memories = extraction.updated
+    turn.needs_confirmation = extraction.needs_confirmation
+    turn.action_items = extraction.action_items
+
+
+class AlreadyAnswered(Exception):
+    """The message already has a reply; retrying would answer it twice."""
+
+
+def unanswered_message(conn: sqlite3.Connection, member_id: int) -> sqlite3.Row | None:
+    """The member's last message, if the concierge never replied to it."""
+    timeline = db.get_timeline(conn, member_id)
+    if timeline and timeline[-1]["direction"] == "inbound":
+        return timeline[-1]
+    return None
+
+
+def retry_reply(conn: sqlite3.Connection, member_id: int, inbound_id: int) -> TurnResult:
+    """Answer a saved message whose reply failed. Memory extraction is not repeated."""
+    pending = unanswered_message(conn, member_id)
+    if pending is None or pending["id"] != inbound_id:
+        raise AlreadyAnswered("This message already has a reply.")
+    member = db.get_member(conn, member_id)
+    identity = ResolvedIdentity(member_id=member_id, display_name=member["display_name"], role=member["role"])
+    return _answer(conn, identity, pending["channel"], inbound_id)
+
+
+def _answer(conn: sqlite3.Connection, identity: ResolvedIdentity, channel: str, inbound_id: int) -> TurnResult:
+    member_id = identity.member_id
     member = db.get_member(conn, member_id)
     # Permission filtering happens here, before the model is called (app/permissions.py).
     if member["role"] == "manager":
@@ -137,7 +193,7 @@ def handle_message(conn: sqlite3.Connection, channel: str, sender_address: str, 
         )
     else:
         memories = memory.get_context(conn, member_id)
-        system = _system_prompt(member, memories)
+        system = _system_prompt(conn, member, memories)
     timeline = db.get_timeline(conn, member_id, limit=TIMELINE_CONTEXT_LIMIT, for_model=True)
     result = call_llm(system, _to_llm_messages(timeline), ConciergeReply)
 
@@ -157,21 +213,18 @@ def handle_message(conn: sqlite3.Connection, channel: str, sender_address: str, 
 
     return TurnResult(
         identity, result.reply, inbound_id, outbound_id,
-        saved_memories=extraction.saved,
-        needs_confirmation=extraction.needs_confirmation,
         used_memories=memory.get_memories_by_ids(conn, member_id, used_ids),
-        action_items=extraction.action_items,
         intro=intro,
     )
 
 
-def _system_prompt(member: sqlite3.Row, memories: list[sqlite3.Row]) -> str:
+def _system_prompt(conn: sqlite3.Connection, member: sqlite3.Row, memories: list[sqlite3.Row]) -> str:
     company = f" at {member['company']}" if member["company"] else ""
     return SYSTEM_PROMPT.format(
         name=member["display_name"],
         title=member["title"] or "member",
         company=company,
-        memories=memory.format_for_prompt(memories),
+        memories=memory.format_for_prompt(memories, conn),
     )
 
 

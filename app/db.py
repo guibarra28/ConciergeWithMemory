@@ -70,13 +70,16 @@ SEED_MEMBERS = [
 
 # Memories other members already have, so intro matching has something to work with.
 # (display_name, content, category, visibility). The private one must never leak (c1).
+# (person, content, category, visibility, days since last confirmed)
 SEED_MEMORIES = [
-    ("Ana Souza", "Led an AI rollout in customer service operations", "expertise", "shareable"),
-    ("Ana Souza", "Wants to meet manufacturing leaders working on automation", "interest", "shareable"),
-    ("Ana Souza", "Attended the March event in São Paulo", "interest", "internal"),
-    ("Carlos Lima", "Implemented computer vision for package inspection in warehouses", "expertise", "shareable"),
-    ("Carlos Lima", "Is considering leaving his job next year", "goal", "private"),
-    ("Marina Alves", "Sells AI quality-control software to manufacturers", "company", "shareable"),
+    ("Ana Souza", "Led an AI rollout in customer service operations", "expertise", "shareable", 0),
+    ("Ana Souza", "Wants to meet manufacturing leaders working on automation", "interest", "shareable", 0),
+    ("Ana Souza", "Attended the March event in São Paulo", "interest", "internal", 0),
+    # Old enough to be flagged "Still true?" in Ana's memory panel (R8).
+    ("Ana Souza", "Leads a customer service team of 400 people", "role", "private", 240),
+    ("Carlos Lima", "Implemented computer vision for package inspection in warehouses", "expertise", "shareable", 0),
+    ("Carlos Lima", "Is considering leaving his job next year", "goal", "private", 0),
+    ("Marina Alves", "Sells AI quality-control software to manufacturers", "company", "shareable", 0),
 ]
 
 
@@ -149,12 +152,14 @@ def _seed(conn: sqlite3.Connection) -> None:
                    VALUES (?, ?, ?, ?, ?)""",
                 (cur.lastrowid, channel_id(conn, channel), address.lower(), int(verified), int(i == 0)),
             )
-    for name, content, category, visibility in SEED_MEMORIES:
+    for name, content, category, visibility, age_days in SEED_MEMORIES:
         if name in new_ids:
+            age = f"-{age_days} days"
             conn.execute(
-                """INSERT INTO memories (member_id, content, category, visibility, confidence)
-                   VALUES (?, ?, ?, ?, 1.0)""",
-                (new_ids[name], content, category, visibility),
+                """INSERT INTO memories (member_id, content, category, visibility, confidence,
+                                         last_confirmed_at, created_at)
+                   VALUES (?, ?, ?, ?, 1.0, datetime('now', ?), datetime('now', ?))""",
+                (new_ids[name], content, category, visibility, age, age),
             )
 
 
