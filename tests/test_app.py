@@ -138,6 +138,29 @@ def test_intro_flow_through_the_interface(monkeypatch, tmp_path):
     assert workflow.get(setup, wf_id)["state"] == "follow_up"
 
 
+def test_member_cannot_send_simulated_email_as_another_member(app):
+    from app import db
+
+    sign_in(app, "ana@varejo-souza.example", auth.demo_password())
+    app.selectbox[0].set_value("Another address…")
+    other = next(t for t in app.text_input if t.label == "Other address")
+    other.input("roberto@metalurgica-silva.example")
+    next(t for t in app.text_area if t.label == "Message").input("What do you know about me?")
+    next(b for b in app.button if b.label == "Send email").click()
+    app.run()
+
+    assert any("belongs to another member" in e.value for e in app.error)
+    conn = db.connect()
+    assert db.get_timeline(conn, 1) == []  # nothing reached Roberto's timeline
+
+
+def test_manager_profiles_show_no_private_memories(app):
+    sign_in(app, "juliana@community.example", auth.demo_password())
+    shown = " ".join(m.value for m in app.markdown)
+    assert "Implemented computer vision for package inspection" in shown  # Carlos, shareable
+    assert "Is considering leaving his job next year" not in shown        # Carlos, private
+
+
 def test_no_emojis_in_the_interface():
     import re
 

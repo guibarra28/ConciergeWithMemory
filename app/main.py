@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
 
-from app import actions, auth, clock, db, memory, workflow
+from app import actions, auth, clock, db, memory, permissions, workflow
+from app.identity import resolve
 from app.llm import LLMError
 from app.orchestrator import TurnResult, handle_message
 
@@ -239,7 +240,26 @@ def manager_view() -> None:
         for wf in intros:
             manager_intro_card(wf)
     with side_col:
-        tab_items, tab_updates = st.tabs(["Your action items", "Updates"])
+        tab_ask, tab_profiles, tab_items, tab_updates = st.tabs(
+            ["Ask the concierge", "Member profiles", "Your action items", "Updates"])
+        with tab_ask:
+            st.caption("The concierge sees only what members shared for intros and team notes, "
+                       "never private memories or conversations.")
+            for msg in db.get_timeline(conn, member_id):
+                with st.chat_message("user" if msg["direction"] == "inbound" else "assistant"):
+                    st.markdown(msg["body"])
+        with tab_profiles:
+            st.caption("Only what members marked Shareable, plus team notes. Private memories never appear here.")
+            visible = permissions.memories_for(conn, current, "team")
+            by_member: dict[str, list] = {}
+            for m in visible:
+                by_member.setdefault(m["owner_name"], []).append(m)
+            if not by_member:
+                st.caption("No member has shared anything yet.")
+            for name, rows in by_member.items():
+                with st.expander(name):
+                    for m in rows:
+                        st.markdown(f"- {m['content']}  \n  :gray[{VISIBILITY_LABEL[m['visibility']]}]")
         with tab_items:
             items = actions.list_owned_by(conn, member_id)
             if not items:
@@ -307,6 +327,14 @@ def manager_intro_card(wf) -> None:
 
 if is_manager:
     manager_view()
+    if prompt := st.chat_input("Ask the concierge about shared profiles"):
+        try:
+            with st.spinner("Thinking..."):
+                handle_message(conn, "chat", db.get_chat_login(conn, member_id), prompt)
+        except LLMError as exc:
+            st.error(f"Your message was saved, but the concierge could not reply: {exc}")
+        else:
+            st.rerun()
     st.stop()
 
 
@@ -521,8 +549,14 @@ def email_tab() -> None:
 
     if sent:
         sender = other.strip() if choice == OTHER_ADDRESS else choice
+        owner = resolve(conn, "email", sender) if sender else None
         if not sender or not body.strip():
             st.warning("Fill in the sender and the message.")
+        elif owner and owner.is_known and owner.member_id != member_id:
+            # The simulator shows the reply on screen. A real reply would go to that
+            # member's inbox, so sending "as" someone else here would leak their data.
+            st.error("That address belongs to another member. You can simulate emails from your own "
+                     "addresses or from an address nobody registered.", icon=":material/block:")
         else:
             try:
                 with st.spinner("Reading the email..."):

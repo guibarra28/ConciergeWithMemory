@@ -24,6 +24,12 @@ Reference: [wireframe.html](wireframe.html).
 
 **Why.** Showing the memories used makes memory inspectable in context, which builds trust and makes wrong memories easy to spot and fix (R1). Using one neutral status for every unsuccessful intro protects the other member's privacy and avoids the awkwardness discovery identified as a pain.
 
+## Why filter before the model
+
+A model cannot reveal what it never received, so removing other people's data before the call makes a leak impossible instead of unlikely. Asking the model to keep a secret depends on it following instructions every time, and a single prompt injection, an ambiguous request or a model update can break that. Filtering in code is also testable: the leak tests check every text sent to the model, which is a guarantee we can run on every change, while "the model behaved" can only be sampled.
+
+In this product the filter lives in one place, [app/permissions.py](../app/permissions.py), and the prompt instruction ("don't share other members' information") is a second layer that shapes the wording of the refusal, not the protection itself.
+
 ## Other decisions
 
 | Date | Decision | Reason |
@@ -43,4 +49,9 @@ Reference: [wireframe.html](wireframe.html).
 | 2026-11-18 | A simulated clock ("Advance 1 day") drives deadlines, reminders and follow-ups. | A multi-day flow has to be demonstrable in minutes. The clock is stored in the database, so a restart keeps the same date. |
 | 2026-11-18 | Action items are extracted in the same model call as memories, and still while memory is paused. Team requests go to the relationship manager; missing due dates default to 7 days and the member can change them. | Action items are commitments, not facts about the member. R7 requires an owner and a due date on every item. |
 | 2026-11-18 | The concierge never says it will book or send something itself. | In testing it promised to reserve an event seat, which only the team can do. |
+| 2026-11-19 | One module ([permissions.py](../app/permissions.py)) decides memory visibility for every purpose: own conversation (all own memories), matching (shareable, not sensitive), team (shareable and internal, not sensitive, managers only). | One place to review and test. Before this, three modules had their own SQL filters. |
+| 2026-11-19 | The manager gets a "Member profiles" view and can ask the concierge questions, both limited to the team view. | Managers need shared profiles to judge matches. Limiting the concierge to the same view means the manager can't get through chat what the profiles don't show. |
+| 2026-11-19 | The simulated inbox refuses to send from another member's verified address. | Found while looking for leaks: signed in as Ana, sending "from" Roberto's address showed his concierge reply on Ana's screen. **Production risk:** real email senders can be spoofed, so the email adapter must verify sender authentication (SPF, DKIM, DMARC) before trusting the From address. |
+| 2026-11-19 | Team notes (`internal`) are not used as the requester's preferences in matching. | Found by the leak tests: a team note about Ana was sent to the matching model as if it were her preference. |
+| 2026-11-19 | Known limitation: a member's *private* preference (e.g. "no vendors") guides their own intro matching, but the manager's chat can't see it and may suggest a vendor. | Private means private, even from the team. The member can make it shareable if they want the team to know. |
 | 2026-11-18 | The reply schema asks the model for the message's language before the reply itself. | A prompt instruction alone was ignored in testing (English questions got Portuguese and Spanish answers). Committing to the language first fixed it. |

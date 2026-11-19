@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app import actions, db
+from app import actions, db, permissions
 from app.actions import ActionItemCandidate
 from app.llm import call_llm
 
@@ -154,19 +154,9 @@ def _insert(conn, member_id, c: MemoryCandidate, source_message_id, channel, sen
 
 # --- Retrieval ---------------------------------------------------------------
 def get_context(conn: sqlite3.Connection, member_id: int) -> list[sqlite3.Row]:
-    """Memories the agent may use in this member's own conversation.
-
-    Only this member's memories; expired ones are left out. Every visibility is allowed
-    here because the member is talking about themselves. Other purposes (intros, manager
-    view) get their own filtered functions in later blocks.
-    """
-    return conn.execute(
-        """SELECT * FROM memories
-           WHERE member_id = ? AND (valid_until IS NULL OR valid_until > datetime('now'))
-           ORDER BY updated_at DESC, id DESC
-           LIMIT ?""",
-        (member_id, CONTEXT_LIMIT),
-    ).fetchall()
+    """Memories the agent may use in this member's own conversation (app/permissions.py)."""
+    return permissions.memories_for(conn, db.get_member(conn, member_id), "own_conversation",
+                                    limit=CONTEXT_LIMIT)
 
 
 def format_for_prompt(memories: list[sqlite3.Row]) -> str:

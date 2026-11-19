@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-from app import clock, db
+from app import clock, db, permissions
 from app.llm import LLMError, call_llm
 
 logger = logging.getLogger(__name__)
@@ -157,12 +157,7 @@ def shared_items(conn: sqlite3.Connection, wf: sqlite3.Row, side: str) -> dict:
 
 
 def shareable_memories(conn: sqlite3.Connection, member_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        """SELECT * FROM memories WHERE member_id = ? AND visibility = 'shareable' AND sensitive = 0
-             AND (valid_until IS NULL OR valid_until > datetime('now'))
-           ORDER BY id""",
-        (member_id,),
-    ).fetchall()
+    return permissions.memories_for(conn, None, "matching", owner_id=member_id)
 
 
 # --- Creating a request and suggesting candidates ----------------------------
@@ -252,11 +247,16 @@ def suggest_candidates(conn: sqlite3.Connection, wf: sqlite3.Row) -> list[Sugges
     pool = candidate_pool(conn, wf["requester_id"])
     if not pool:
         return []
-    preferences = conn.execute(
-        """SELECT content FROM memories WHERE member_id = ? AND sensitive = 0
-             AND category IN ('preference', 'goal', 'interest')""",
-        (wf["requester_id"],),
-    ).fetchall()
+    # The requester's own preferences help *their* request ("no vendors"). They go through
+    # the own-conversation rule, minus anything sensitive, and the prompt forbids repeating
+    # them in `why`, which the manager sees.
+    requester = db.get_member(conn, wf["requester_id"])
+    # Team notes ('internal') are not the member's preferences, so they stay out.
+    preferences = [
+        m for m in permissions.memories_for(conn, requester, "own_conversation")
+        if not m["sensitive"] and m["visibility"] != "internal"
+        and m["category"] in ("preference", "goal", "interest")
+    ]
     listing = "\n".join(
         f"- id {c['member_id']}: {c['name_title']}. " + ("; ".join(c["shareable"]) or "No details shared.")
         for c in pool
