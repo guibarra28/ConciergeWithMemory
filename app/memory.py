@@ -2,8 +2,10 @@
 
 Policy: docs/memory_policy.md. The rules that protect the member are enforced here in
 code, not left to the model:
-- a candidate is saved only if its supporting excerpt is literally in the message
-  (the model cannot save something the member did not say);
+- a candidate is saved only if its supporting excerpt is in the message, word for word or
+  with all its words in one sentence (the model cannot save something the member did not say);
+- a candidate from the same sentence as a health fact is held for the same confirmation;
+- a candidate that restates a commitment is left to the action items, not saved as a memory;
 - low-confidence candidates are dropped;
 - sensitive candidates are never saved without the member's explicit confirmation;
 - nothing is saved while memory is paused;
@@ -108,7 +110,8 @@ def extract_and_save(
     if is_paused(conn, member_id):
         outcome = ExtractionOutcome([], [], [(c, "memory paused") for c in result.candidates])
     else:
-        outcome = apply_candidates(conn, member_id, result.candidates, message_text, source_message_id, channel)
+        outcome = apply_candidates(conn, member_id, result.candidates, message_text, source_message_id, channel,
+                                   commitments=[a.source_excerpt for a in result.action_items])
     outcome.action_items = actions.save_candidates(
         conn, member_id, result.action_items, message_text, source_message_id)
     return outcome
@@ -121,20 +124,32 @@ def apply_candidates(
     message_text: str,
     source_message_id: int | None,
     channel: str,
+    commitments: list[str] = (),
 ) -> ExtractionOutcome:
     outcome = ExtractionOutcome([], [], [])
     existing = {_norm(m["content"]) for m in list_memories(conn, member_id)}
-    message_words = _words(message_text)
+    commitments = [x for x in commitments if _excerpt_found(x, message_text)]
+    # Sentences that carry a health fact: everything else said in them is held too, so it can't
+    # slip through reworded as a plain preference ("wants to travel less"). Health only: applied
+    # to every sensitive category, it also held ordinary facts said next to "I travel a lot".
+    health_sentences = {
+        _sentence_index(message_text, c.source_excerpt) for c in candidates
+        if c.category == "health" and _excerpt_found(c.source_excerpt, message_text)
+    }
 
     for c in candidates:
         if c.confidence < MIN_CONFIDENCE:
             outcome.discarded.append((c, "low confidence"))
-        elif not _words(c.source_excerpt) or _words(c.source_excerpt) not in message_words:
+        elif not _excerpt_found(c.source_excerpt, message_text):
             outcome.discarded.append((c, "excerpt not found in message"))
         elif _norm(c.content) in existing:
             outcome.discarded.append((c, "duplicate"))
+        elif any(_restates(c.source_excerpt, x) for x in commitments):
+            outcome.discarded.append((c, "commitment: kept as an action item"))
         elif c.sensitive or c.category in SENSITIVE_CATEGORIES:
             outcome.needs_confirmation.append(c)
+        elif _sentence_index(message_text, c.source_excerpt) in health_sentences:
+            outcome.needs_confirmation.append(c.model_copy(update={"sensitive": True}))
         elif olds := _replaceable(conn, member_id, c.replaces_memory_ids):
             outcome.updated.append((_replace(conn, member_id, olds, c, source_message_id, channel),
                                     [dict(o) for o in olds]))
@@ -364,6 +379,38 @@ def set_paused(conn: sqlite3.Connection, member_id: int, paused: bool) -> None:
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+|\n+", text or "") if s.strip()]
+
+
+def _sentence_index(message: str, excerpt: str) -> int | None:
+    """Which sentence of the message the excerpt comes from (None if none holds all its words)."""
+    words = _words(excerpt)
+    for i, sentence in enumerate(_sentences(message)):
+        sentence_words = _words(sentence)
+        if words and (words in sentence_words or set(words.split()) <= set(sentence_words.split())):
+            return i
+    return None
+
+
+def _excerpt_found(excerpt: str, message: str) -> bool:
+    """Word for word, or every word of the excerpt in one sentence of the message.
+
+    The second form accepts a reordered quote ("I now run" for "now I run") without letting
+    the model assemble a fact from words scattered across the message.
+    """
+    words = _words(excerpt)
+    if not words:
+        return False
+    return words in _words(message) or _sentence_index(message, excerpt) is not None
+
+
+def _restates(excerpt: str, commitment: str) -> bool:
+    """Most of the memory's excerpt is the commitment's excerpt: it's the same statement."""
+    mine, theirs = set(_words(excerpt).split()), set(_words(commitment).split())
+    return bool(mine) and len(mine & theirs) >= 0.6 * len(mine)
 
 
 def _words(text: str) -> str:

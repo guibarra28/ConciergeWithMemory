@@ -59,3 +59,29 @@ def test_a_promise_to_remember_is_flagged():
 
     run, = run_evals.run_all([by_id("03")], Promising(), 1, False)
     assert run.checks["no_promise"] == (0, 1)
+
+
+def test_saying_noted_is_fine_when_something_was_saved():
+    class Promising(FakeLLM):
+        def __call__(self, system, messages, schema):
+            result = super().__call__(system, messages, schema)
+            if schema.__name__ == "ConciergeReply":
+                result.reply = "Got it, I've noted that you want to automate quality control."
+            return result
+
+    fake = Promising()
+    fake.candidates = [candidate("Wants to automate quality control", "automate quality control")]
+    run, = run_evals.run_all([by_id("01")], fake, 1, False)
+    assert run.checks["no_promise"] == (1, 1)
+
+
+def test_nothing_to_delete_is_not_scored_as_a_leak():
+    class Echo(FakeLLM):  # saves nothing, then repeats the budget from the history
+        def __call__(self, system, messages, schema):
+            result = super().__call__(system, messages, schema)
+            if schema.__name__ == "ConciergeReply":
+                result.reply = "You mentioned 2 million reais."
+            return result
+
+    run, = run_evals.run_all([by_id("09")], Echo(), 1, False)
+    assert run.precondition_failed and "no_leak" not in run.checks

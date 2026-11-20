@@ -34,9 +34,9 @@ SYSTEM_PROMPT = """You are the concierge of a private community of CEOs, investo
 You are talking to {name} ({title}{company}).
 The conversation below includes messages from chat and email; each one is tagged with its channel.
 Be concise, warm and practical. Never invent facts about the member or about other members.
-You have no internet access and no real-time data (weather, news, prices, schedules). If asked,
-say so plainly instead of guessing.
-Never promise to remember something; the app shows the member what was saved.
+You have no internet access and no information about events, venues, dress codes, schedules,
+weather, news or prices. If asked, say you don't have that information and offer to check with
+their relationship manager. Never guess.
 You can't book, reserve or send anything yourself. When the member asks for something the
 community team must do, say you've passed it to their relationship manager.
 You only know this member. If asked what another member said, does or thinks, say you can't
@@ -51,6 +51,11 @@ These memories are the member's latest word: if the conversation history disagre
 them, trust the memories. Do not bring up facts from the history that are not in this list.
 If your answer uses a memory listed as possibly out of date, say what you have on file
 and ask the member to confirm it is still true, in the same reply.
+
+What the app saved from the member's latest message (the member sees it on screen):
+{saved_this_turn}
+Mention saving or remembering only what is in that list. Otherwise never say you noted, saved,
+will remember or will keep something in mind.
 
 Use a memory only when it is relevant to the answer, and list the ids of the memories you
 actually used in `used_memory_ids`. If you used none, return an empty list.
@@ -133,7 +138,7 @@ def handle_message(conn: sqlite3.Connection, channel: str, sender_address: str, 
         extraction = memory.ExtractionOutcome([], [], [])
 
     try:
-        turn = _answer(conn, identity, channel, inbound_id)
+        turn = _answer(conn, identity, channel, inbound_id, _saved_note(conn, member_id, extraction))
     except LLMError as exc:
         # The message and whatever was remembered are kept; the reply can be retried.
         partial = TurnResult(identity, "", inbound_id, None)
@@ -180,7 +185,19 @@ def retry_reply(conn: sqlite3.Connection, member_id: int, inbound_id: int) -> Tu
     return _answer(conn, identity, pending["channel"], inbound_id)
 
 
-def _answer(conn: sqlite3.Connection, identity: ResolvedIdentity, channel: str, inbound_id: int) -> TurnResult:
+def _saved_note(conn: sqlite3.Connection, member_id: int, extraction: memory.ExtractionOutcome) -> str:
+    """What was really saved this turn, so the reply never claims more (eval error 3)."""
+    if memory.is_paused(conn, member_id):
+        return "Nothing: memory is paused."
+    lines = [f"- Saved: {m['content']}" for m in extraction.saved]
+    lines += [f"- Updated: {new['content']}" for new, _ in extraction.updated]
+    lines += [f"- Waiting for the member's confirmation (not saved): {c.content}"
+              for c in extraction.needs_confirmation]
+    return "\n".join(lines) or "Nothing."
+
+
+def _answer(conn: sqlite3.Connection, identity: ResolvedIdentity, channel: str, inbound_id: int,
+            saved_note: str = "Unknown: don't mention saving anything.") -> TurnResult:
     member_id = identity.member_id
     member = db.get_member(conn, member_id)
     # Permission filtering happens here, before the model is called (app/permissions.py).
@@ -193,7 +210,7 @@ def _answer(conn: sqlite3.Connection, identity: ResolvedIdentity, channel: str, 
         )
     else:
         memories = memory.get_context(conn, member_id)
-        system = _system_prompt(conn, member, memories)
+        system = _system_prompt(conn, member, memories, saved_note)
     timeline = db.get_timeline(conn, member_id, limit=TIMELINE_CONTEXT_LIMIT, for_model=True)
     result = call_llm(system, _to_llm_messages(timeline), ConciergeReply)
 
@@ -218,13 +235,15 @@ def _answer(conn: sqlite3.Connection, identity: ResolvedIdentity, channel: str, 
     )
 
 
-def _system_prompt(conn: sqlite3.Connection, member: sqlite3.Row, memories: list[sqlite3.Row]) -> str:
+def _system_prompt(conn: sqlite3.Connection, member: sqlite3.Row, memories: list[sqlite3.Row],
+                   saved_note: str = "Nothing.") -> str:
     company = f" at {member['company']}" if member["company"] else ""
     return SYSTEM_PROMPT.format(
         name=member["display_name"],
         title=member["title"] or "member",
         company=company,
         memories=memory.format_for_prompt(memories, conn),
+        saved_this_turn=saved_note,
     )
 
 

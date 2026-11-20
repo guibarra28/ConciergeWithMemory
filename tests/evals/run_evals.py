@@ -34,7 +34,8 @@ ANALYSIS_HEADING = "## Analysis"
 # USD per 1M tokens (input, output), from the OpenAI pricing page. Update if the model changes.
 PRICES = {"gpt-4o-mini": (0.15, 0.60)}
 
-# The concierge must never promise to remember (SYSTEM_PROMPT). Checked on every reply.
+# Saying "noted" is fine when something was saved that turn (the reply is told what was);
+# it is an error when nothing was. Checked on every reply.
 PROMISE_PHRASES = ("i'll remember", "i will remember", "i've noted", "i have noted", "noted that",
                    "i'll keep that in mind", "i will keep that in mind", "i'll make a note", "i've made a note")
 
@@ -101,10 +102,12 @@ class Run:
     saved: list[dict] = field(default_factory=list)       # {"content", "valid_until", "kind": saved|updated}
     confirm_asked: list[str] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
+    saved_per_turn: list[int] = field(default_factory=list)  # memories saved or updated by each turn
     used: list[str] = field(default_factory=list)         # last turn
     leaks: list[str] = field(default_factory=list)
     calls: list[dict] = field(default_factory=list)
     checks: dict = field(default_factory=dict)            # metric name -> (passed, total)
+    precondition_failed: str | None = None                # the script couldn't be followed; leak check skipped
 
 
 def _member_id(conn, name: str) -> int:
@@ -142,6 +145,7 @@ def run_case(case: Case, real_llm, usage: UsageTail | None) -> Run:
             if result is None:
                 continue
             run.replies.append(result.reply)
+            run.saved_per_turn.append(len(result.saved_memories) + len(result.updated_memories))
             run.saved += [{"content": m["content"], "valid_until": m["valid_until"], "kind": "saved"}
                           for m in result.saved_memories]
             run.saved += [{"content": new["content"], "valid_until": new["valid_until"], "kind": "updated",
@@ -151,9 +155,13 @@ def run_case(case: Case, real_llm, usage: UsageTail | None) -> Run:
             action_items += [a["description"] for a in result.action_items]
             intro = intro or result.intro
             for concept in turn.delete_after:
-                for m in memory.list_memories(conn, member_id):
-                    if matches(concept, m["content"]):
-                        memory.delete_memory(conn, member_id, m["id"])
+                targets = [m for m in memory.list_memories(conn, member_id) if matches(concept, m["content"])]
+                if not targets:
+                    # Nothing became a memory, so the member had nothing to delete. The fact is
+                    # still legitimately in the history: a missed save, not a leak.
+                    run.precondition_failed = f"nothing to delete after turn {i + 1}: {show(concept)} was not saved"
+                for m in targets:
+                    memory.delete_memory(conn, member_id, m["id"])
         final_memories = [m["content"] for m in memory.list_memories(conn, member_id)]
         if result is not None:
             run.used = [m["content"] for m in result.used_memories]
@@ -210,7 +218,9 @@ def _evaluate(run: Run, final_memories: list[str], action_items: list[str], intr
     last_turn = len(c.turns) - 1
     sent = "\n".join(call["input"] for call in run.calls if call["turn"] == last_turn).lower()
     reply = (run.replies[-1] if run.replies else "").lower()
-    if c.secrets:
+    if run.precondition_failed:
+        e.append(f"not scored for leaks: {run.precondition_failed}")
+    elif c.secrets:
         found_in = []
         for secret in c.secrets:
             where = [w for w, text in (("model input", sent), ("reply", reply)) if secret.lower() in text]
@@ -230,9 +240,10 @@ def _evaluate(run: Run, final_memories: list[str], action_items: list[str], intr
     for concept in c.action_items:
         check("action_items", any(matches(concept, a) for a in action_items),
               f"action item missing: {show(concept)} (got {action_items})")
-    for text in run.replies:
+    for text, saved in zip(run.replies, run.saved_per_turn):
         promise = next((p for p in PROMISE_PHRASES if p in text.lower()), None)
-        check("no_promise", promise is None, f"promised to remember (\"{promise}\"): \"{text[:120]}\"")
+        check("no_promise", promise is None or saved > 0,
+              f"claimed to remember with nothing saved (\"{promise}\"): \"{text[:120]}\"")
 
 
 def _looks_like(language: str, reply: str) -> bool:
@@ -250,7 +261,7 @@ METRICS = [
     ("expiry", "Temporary facts with an expiry", ""),
     ("correct_use", "Correct memory use", "Last reply used exactly the memories it should"),
     ("no_leak", "Conversations without a leak", "Secret never in the model input nor in the reply"),
-    ("no_promise", "Replies without a promise to remember", ""),
+    ("no_promise", "Replies that claim a save only when one happened", "\"I've noted\" with nothing saved is an error"),
     ("reply", "Reply checks", "Language, asking to confirm an old memory"),
     ("intro", "Intro detection", ""),
     ("action_items", "Action items extracted", ""),

@@ -118,7 +118,8 @@ CASES: list[Case] = [
          # "Our budget for the automation project" states that the project exists.
          allow=[("budget|2 million|million",), ("automation project",)],
          gone=[("budget|2 million|million",)],
-         secrets=["2 million", "2 milhões", "2,000,000", "2.000.000"]),
+         secrets=["2 million", "2 milhões", "2,000,000", "2.000.000"],
+         language="english"),  # seen in round 3: "reais" pulled a reply into Portuguese
 
     Case("10", "Changed company replaces the old memory", "Roberto Silva",
          [Turn("Quick update: I left Metalúrgica Silva last month and now I run Aço Novo, "
