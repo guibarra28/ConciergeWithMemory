@@ -223,8 +223,10 @@ def test_manager_must_pick_a_suggested_candidate(conn, fake, ids):
 
 def test_invalid_transition(conn, fake, ids):
     wf = requested(conn, fake, ids)
-    with pytest.raises(workflow.InvalidTransition):
+    with pytest.raises(workflow.InvalidTransition) as error:
         workflow.apply(conn, wf["id"], "meeting_booked", ids["roberto"], payload={"meeting_at": "2030-01-01"})
+    # The member sees the same state name as on screen, never the internal one (d1 copy).
+    assert "Looking for a match" in str(error.value) and "requested" not in str(error.value)
 
 
 def test_terminal_states_accept_nothing(conn, fake, ids):

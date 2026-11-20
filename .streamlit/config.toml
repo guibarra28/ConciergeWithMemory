@@ -1,0 +1,49 @@
+# Visual identity: a quiet members' club. Ivory paper, ink text, one deep green accent.
+# Status colors (green, blue, orange, red) are tuned so notices read as calm, not alarming.
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+headingFont = "Newsreader:https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&display=swap"
+headingFontWeights = 600
+headingFontSizes = ["2.25rem", "1.5rem", "1.15rem", "1rem", "0.95rem", "0.9rem"]
+baseFontSize = 15
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
+showSidebarBorder = true
+
+[theme.light]
+primaryColor = "#1F5A4E"
+backgroundColor = "#F8F6F1"
+secondaryBackgroundColor = "#EFEBE3"
+textColor = "#1C2230"
+borderColor = "#DDD6C9"
+linkColor = "#1F5A4E"
+greenColor = "#2E7D5B"
+blueColor = "#3D6A8F"
+orangeColor = "#B26A1E"
+redColor = "#B23A3A"
+
+[theme.light.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F1EA"
+borderColor = "#E4DED2"
+
+[theme.dark]
+primaryColor = "#6CC3AE"
+backgroundColor = "#14181F"
+secondaryBackgroundColor = "#1E242E"
+textColor = "#E7E9EE"
+borderColor = "#323A47"
+linkColor = "#6CC3AE"
+greenColor = "#5DBE8F"
+blueColor = "#7FA9CF"
+orangeColor = "#E0A05A"
+redColor = "#E07878"
+
+[theme.dark.sidebar]
+backgroundColor = "#181D25"
+secondaryBackgroundColor = "#222935"
+borderColor = "#2C3441"

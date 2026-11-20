@@ -51,7 +51,7 @@ Sensitive memories are always private and can never be made shareable. **(code a
 | **Delete** | Removes the memory row. The exchange it came from stays visible to the member but is no longer read by the concierge, so it is really forgotten. **(code)** |
 | **Pause memory** | Nothing new is saved, sensitive confirmations included. Existing memories are still used. **(code)** |
 | **Delete everything** | Removes all memories, action items and the whole conversation history. |
-| **"Used:" under each reply** | Shows which memories shaped the answer, so wrong ones are easy to spot. |
+| **"This reply used:" under each reply** | Shows which memories shaped the answer, so wrong ones are easy to spot. |
 
 ## Why these rules
 

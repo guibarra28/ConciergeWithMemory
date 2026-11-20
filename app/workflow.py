@@ -68,7 +68,21 @@ CANCEL_ALLOWED = {
     "scheduled": {"A", "B", "manager", "system"},
 }
 
-WONT_GO_AHEAD = "This intro won't go ahead."
+# Members never see the reason an intro stopped (model.md), so every ending reads the same.
+WONT_GO_AHEAD = "This intro won't go ahead. You can ask the concierge for another one anytime."
+NO_MATCH = "I couldn't find a good match for this request. You can ask again anytime."
+
+STATE_LABEL = {
+    "requested": "Looking for a match", "awaiting_a": "Waiting for the requester",
+    "awaiting_b": "Waiting for the other member", "introduced": "Introduced",
+    "scheduled": "Meeting booked", "follow_up": "Follow-up", "completed": "Completed",
+    "no_match": "No match", "declined": "Won't go ahead", "expired": "Won't go ahead",
+    "cancelled": "Won't go ahead",
+}
+
+
+def _day(value: str) -> str:
+    return clock.parse(value).strftime("%a %d %b")
 
 
 class WorkflowError(Exception):
@@ -378,11 +392,12 @@ def apply(
     if wf is None:
         raise WorkflowError("This intro no longer exists.")
     if expected_version is not None and wf["version"] != expected_version:
-        raise Conflict("This intro changed while you were looking at it. Please review it again.")
+        raise Conflict("Someone updated this intro while you had it open, so nothing changed. Check its new status and try again.")
 
     to_state = TRANSITIONS.get(event, {}).get(wf["state"])
     if to_state is None:
-        raise InvalidTransition(f"This intro is {wf['state'].replace('_', ' ')}, so that action isn't available.")
+        raise InvalidTransition(f"This intro is now at \"{STATE_LABEL[wf['state']]}\", so that action "
+                                "isn't available anymore.")
     _check_actor(conn, wf, event, actor_id)
     payload = payload or {}
 
@@ -398,7 +413,7 @@ def apply(
             (to_state, *fields.values(), clock.now_str(conn), wf_id, wf["version"]),
         )
         if cur.rowcount != 1:
-            raise Conflict("This intro changed while you were looking at it. Please review it again.")
+            raise Conflict("Someone updated this intro while you had it open, so nothing changed. Check its new status and try again.")
         _insert_event(conn, wf_id, event, wf["state"], to_state, actor_id, payload,
                       idempotency_key or f"{event}:{wf_id}:{wf['version']}:{uuid.uuid4().hex[:8]}")
         _notify(conn, get(conn, wf_id), event, wf["state"], actor_id)
@@ -487,9 +502,9 @@ def _notify(conn, wf, event: str, from_state: str, actor_id: int | None) -> None
         db.add_notification(conn, b, f"You're introduced to {a_row['display_name']}.", wf["id"])
     elif event == "meeting_booked":
         for person in (a, b):
-            send(person, f"Meeting booked for {wf['meeting_at'][:10]}.")
+            send(person, f"Meeting booked for {_day(wf['meeting_at'])}.")
     elif event == "no_match":
-        send(a, "I couldn't find a good match for this request. You can ask again anytime.")
+        send(a, NO_MATCH)
     elif state == "follow_up":
         send(manager_id, f"Time to follow up: {a_row['display_name']} and {b_row['display_name']}.")
         send(a, f"How did it go with {b_row['display_name']}? Tell your relationship manager.")
@@ -541,7 +556,8 @@ def tick(conn: sqlite3.Connection) -> TickReport:
                 for person in recipients:
                     if person:
                         db.add_notification(conn, person,
-                                            f"Reminder: an intro is waiting for you until {wf['deadline_at'][:10]}.",
+                                            f"Reminder: an intro is waiting for you until "
+                                            f"{_day(wf['deadline_at'])}. Open Pending to answer.",
                                             wf["id"])
             report.reminders += 1
 

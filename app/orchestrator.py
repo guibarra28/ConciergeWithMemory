@@ -24,10 +24,9 @@ logger = logging.getLogger(__name__)
 TIMELINE_CONTEXT_LIMIT = 20
 
 UNKNOWN_SENDER_REPLY = (
-    "Thanks for your message. We couldn't match this address to a member account, "
-    "so we haven't used any account information to reply. If you're a member, please "
-    "write from the email registered with the community, or ask your relationship "
-    "manager to add this address."
+    "Thanks for your message. This address isn't registered to a member account, so this "
+    "reply doesn't use any account information. If you're a member, write from the email "
+    "you registered with the community, or ask your relationship manager to add this address."
 )
 
 SYSTEM_PROMPT = """You are the concierge of a private community of CEOs, investors and executives.

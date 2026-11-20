@@ -79,6 +79,7 @@ def test_memory_panel_lists_edits_and_deletes(monkeypatch, tmp_path):
     at.run()
     assert memory.list_memories(setup, 1) == []
     assert not any(e.label == "Automate QC in 2027" for e in at.sidebar.expander)
+    assert any(s.value.startswith("Deleted: Automate QC in 2027") for s in at.success)  # d1 copy
 
 
 def test_pause_toggle(app):
@@ -207,7 +208,7 @@ def test_stale_memory_asks_still_true(app):
     from app import db, memory
 
     sign_in(app, "ana@varejo-souza.example", auth.demo_password())
-    assert any("not been confirmed in 6 months" in i.value for i in app.sidebar.info)
+    assert any("not confirmed in 6 months" in i.value for i in app.sidebar.info)
     conn = db.connect()
     old = next(m for m in memory.list_memories(conn, 2) if m["content"] == "Leads a customer service team of 400 people")
     app.sidebar.button(key=f"confirm_{old['id']}").click().run()

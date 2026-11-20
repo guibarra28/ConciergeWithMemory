@@ -102,7 +102,7 @@ def remind_due(conn: sqlite3.Connection) -> int:
         (soon,),
     ).fetchall():
         db.add_notification(conn, item["owner_id"],
-                            f"Action item due {item['due_date'][:10]}: {item['description']}")
+                            f"Action item due {clock.parse(item['due_date']):%a %d %b}: {item['description']}")
         conn.execute("UPDATE action_items SET reminded_at = ? WHERE id = ?", (clock.now_str(conn), item["id"]))
         count += 1
     conn.commit()
